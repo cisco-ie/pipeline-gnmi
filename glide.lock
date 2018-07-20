@@ -1,5 +1,5 @@
-hash: 9e2d657be9c18d210df04a568b9280a1b7c558c2ac7c654f996467017d3fdcd5
-updated: 2018-07-20T10:59:25.7281691+02:00
+hash: ef5f00171fa74550319c49af09d8add82a93eb824bd9fa49375ea239c9e708f6
+updated: 2018-07-20T13:38:24.3077779+02:00
 imports:
 - name: github.com/beorn7/perks
   version: 4c0e84591b9aa9e6dcfdf3e020114cd81f89d5f9
@@ -614,6 +614,7 @@ imports:
   subpackages:
   - jsonpb
   - proto
+  - protoc-gen-go/descriptor
   - ptypes
   - ptypes/any
   - ptypes/duration
@@ -631,6 +632,11 @@ imports:
   version: 3247c84500bff8d9fb6d579d800f20b3e091582c
   subpackages:
   - pbutil
+- name: github.com/openconfig/gnmi
+  version: 3e9008957ea7dc67ce5b44b5dd28f00c53618bc2
+  subpackages:
+  - proto/gnmi
+  - proto/gnmi_ext
 - name: github.com/philhofer/fwd
   version: bb6d471dc95d4fe11e432687f8b70ff496cf3136
 - name: github.com/pierrec/lz4
@@ -663,14 +669,12 @@ imports:
   version: 22114655baec1a3d72fc99e95968c9e97b226b22
 - name: github.com/sirupsen/logrus
   version: 92052687f8ec598ff0da626d2909478cfd1e3a3c
-- name: github.com/sirupsen/logrus
-  version: 92052687f8ec598ff0da626d2909478cfd1e3a3c
 - name: github.com/tinylib/msgp
   version: b2b6a672cf1e5b90748f79b8b81fc8c5cf0571a1
   subpackages:
   - msgp
 - name: golang.org/x/crypto
-  version: a2144134853fc9a27a7b1e3eb4f19f1a76df13c9
+  version: c3a3ad6d03f7a915c0f7e194b7152974bb73d287
   subpackages:
   - ssh/terminal
 - name: golang.org/x/net

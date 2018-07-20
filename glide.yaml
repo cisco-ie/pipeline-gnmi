@@ -30,3 +30,6 @@ import:
   - proto_go
   - proto_go/mdt_grpc_dialin
   - proto_go/mdt_grpc_dialout
+- package: github.com/openconfig/gnmi
+  subpackages:
+  - proto/gnmi

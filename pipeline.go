@@ -272,6 +272,7 @@ func startupConductor(
 		"grpc":   grpcInputModuleNew,
 		"kafka":  kafkaInputModuleNew,
 		"udp":    udpInputModuleNew,
+		"gnmi":   gnmiInputModuleNew,
 	}
 
 	conductor = conductorState{
