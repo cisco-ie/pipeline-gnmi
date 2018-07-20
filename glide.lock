@@ -663,7 +663,7 @@ imports:
   version: 22114655baec1a3d72fc99e95968c9e97b226b22
 - name: github.com/sirupsen/logrus
   version: 92052687f8ec598ff0da626d2909478cfd1e3a3c
-- name: github.com/Sirupsen/logrus
+- name: github.com/sirupsen/logrus
   version: 92052687f8ec598ff0da626d2909478cfd1e3a3c
 - name: github.com/tinylib/msgp
   version: b2b6a672cf1e5b90748f79b8b81fc8c5cf0571a1
@@ -728,8 +728,4 @@ imports:
   - transport
 - name: gopkg.in/bsm/sarama-cluster.v2
   version: cf455bc755fe41ac9bb2861e7a961833d9c2ecc3
-testImports:
-- name: github.com/cisco/bigmuddy-network-telemetry-pipeline
-  version: a57e87c59ac220ad7725b6b74c3570243e1a4ac3
-  subpackages:
-  - mdt_msg_samples
+

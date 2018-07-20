@@ -15,7 +15,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/prometheus/client_golang/prometheus"
 	"io/ioutil"
 	"os"
@@ -155,7 +155,7 @@ type metricsSpecForBasepath struct {
 type statRecord struct {
 	sync.Mutex
 	lastTS  uint64
-	deltaTS prometheus.Summary
+	deltaTS prometheus.Observer
 }
 
 type statRecordTable struct {

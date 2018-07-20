@@ -25,7 +25,7 @@ package main
 import (
 	"bufio"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"github.com/influxdata/influxdb/client/v2"
 	"os"
 	"runtime"

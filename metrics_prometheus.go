@@ -13,7 +13,7 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	log "github.com/Sirupsen/logrus"
+	log "github.com/sirupsen/logrus"
 	"hash/fnv"
 	"net/http"
 	"net/url"

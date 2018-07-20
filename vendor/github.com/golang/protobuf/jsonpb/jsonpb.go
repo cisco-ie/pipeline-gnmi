@@ -67,6 +67,9 @@ type Marshaler struct {
 	// Whether to render fields with zero values.
 	EmitDefaults bool
 
+	// Whether to render int64/uint64 as strings or not?
+	EmitUInt64Unquoted bool
+
 	// A string to indent each level by. The presence of this field will
 	// also cause a space to appear between the field separator and
 	// value, and for newlines to be appear between fields and array
@@ -622,7 +625,7 @@ func (m *Marshaler) marshalValue(out *errWriter, prop *proto.Properties, v refle
 	if err != nil {
 		return err
 	}
-	needToQuote := string(b[0]) != `"` && (v.Kind() == reflect.Int64 || v.Kind() == reflect.Uint64)
+	needToQuote := !m.EmitUInt64Unquoted && string(b[0]) != `"` && (v.Kind() == reflect.Int64 || v.Kind() == reflect.Uint64)
 	if needToQuote {
 		out.write(`"`)
 	}
