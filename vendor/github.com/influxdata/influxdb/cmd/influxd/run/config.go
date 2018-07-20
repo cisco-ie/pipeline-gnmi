@@ -1,23 +1,20 @@
 package run
 
 import (
-	"bytes"
 	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
 	"os/user"
 	"path/filepath"
-	"reflect"
 	"regexp"
-	"strconv"
 	"strings"
-	"time"
 
 	"github.com/BurntSushi/toml"
 	"github.com/influxdata/influxdb/coordinator"
+	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/monitor"
-	"github.com/influxdata/influxdb/services/admin"
+	"github.com/influxdata/influxdb/monitor/diagnostics"
 	"github.com/influxdata/influxdb/services/collectd"
 	"github.com/influxdata/influxdb/services/continuous_querier"
 	"github.com/influxdata/influxdb/services/graphite"
@@ -26,14 +23,18 @@ import (
 	"github.com/influxdata/influxdb/services/opentsdb"
 	"github.com/influxdata/influxdb/services/precreator"
 	"github.com/influxdata/influxdb/services/retention"
+	"github.com/influxdata/influxdb/services/storage"
 	"github.com/influxdata/influxdb/services/subscriber"
 	"github.com/influxdata/influxdb/services/udp"
+	itoml "github.com/influxdata/influxdb/toml"
 	"github.com/influxdata/influxdb/tsdb"
+	"golang.org/x/text/encoding/unicode"
+	"golang.org/x/text/transform"
 )
 
 const (
 	// DefaultBindAddress is the default address for various RPC services.
-	DefaultBindAddress = ":8088"
+	DefaultBindAddress = "127.0.0.1:8088"
 )
 
 // Config represents the configuration format for the influxd binary.
@@ -44,10 +45,11 @@ type Config struct {
 	Retention   retention.Config   `toml:"retention"`
 	Precreator  precreator.Config  `toml:"shard-precreation"`
 
-	Admin          admin.Config      `toml:"admin"`
 	Monitor        monitor.Config    `toml:"monitor"`
 	Subscriber     subscriber.Config `toml:"subscriber"`
 	HTTPD          httpd.Config      `toml:"http"`
+	Logging        logger.Config     `toml:"logging"`
+	Storage        storage.Config    `toml:"ifql"`
 	GraphiteInputs []graphite.Config `toml:"graphite"`
 	CollectdInputs []collectd.Config `toml:"collectd"`
 	OpenTSDBInputs []opentsdb.Config `toml:"opentsdb"`
@@ -70,10 +72,11 @@ func NewConfig() *Config {
 	c.Coordinator = coordinator.NewConfig()
 	c.Precreator = precreator.NewConfig()
 
-	c.Admin = admin.NewConfig()
 	c.Monitor = monitor.NewConfig()
 	c.Subscriber = subscriber.NewConfig()
 	c.HTTPD = httpd.NewConfig()
+	c.Logging = logger.NewConfig()
+	c.Storage = storage.NewConfig()
 
 	c.GraphiteInputs = []graphite.Config{graphite.NewConfig()}
 	c.CollectdInputs = []collectd.Config{collectd.NewConfig()}
@@ -109,20 +112,22 @@ func NewDemoConfig() (*Config, error) {
 	return c, nil
 }
 
-// trimBOM trims the Byte-Order-Marks from the beginning of the file.
-// this is for Windows compatability only.
-// see https://github.com/influxdata/telegraf/issues/1378
-func trimBOM(f []byte) []byte {
-	return bytes.TrimPrefix(f, []byte("\xef\xbb\xbf"))
-}
-
 // FromTomlFile loads the config from a TOML file.
 func (c *Config) FromTomlFile(fpath string) error {
 	bs, err := ioutil.ReadFile(fpath)
 	if err != nil {
 		return err
 	}
-	bs = trimBOM(bs)
+
+	// Handle any potential Byte-Order-Marks that may be in the config file.
+	// This is for Windows compatibility only.
+	// See https://github.com/influxdata/telegraf/issues/1378 and
+	// https://github.com/influxdata/influxdb/issues/8965.
+	bom := unicode.BOMOverride(transform.Nop)
+	bs, _, err = transform.Bytes(bom, bs)
+	if err != nil {
+		return err
+	}
 	return c.FromToml(string(bs))
 }
 
@@ -155,6 +160,18 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.ContinuousQuery.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.Retention.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.Precreator.Validate(); err != nil {
+		return err
+	}
+
 	if err := c.Subscriber.Validate(); err != nil {
 		return err
 	}
@@ -175,120 +192,63 @@ func (c *Config) Validate() error {
 }
 
 // ApplyEnvOverrides apply the environment configuration on top of the config.
-func (c *Config) ApplyEnvOverrides() error {
-	return c.applyEnvOverrides("INFLUXDB", reflect.ValueOf(c))
+func (c *Config) ApplyEnvOverrides(getenv func(string) string) error {
+	return itoml.ApplyEnvOverrides(getenv, "INFLUXDB", c)
 }
 
-func (c *Config) applyEnvOverrides(prefix string, spec reflect.Value) error {
-	// If we have a pointer, dereference it
-	s := spec
-	if spec.Kind() == reflect.Ptr {
-		s = spec.Elem()
+// Diagnostics returns a diagnostics representation of Config.
+func (c *Config) Diagnostics() (*diagnostics.Diagnostics, error) {
+	return diagnostics.RowFromMap(map[string]interface{}{
+		"reporting-disabled": c.ReportingDisabled,
+		"bind-address":       c.BindAddress,
+	}), nil
+}
+
+func (c *Config) diagnosticsClients() map[string]diagnostics.Client {
+	// Config settings that are always present.
+	m := map[string]diagnostics.Client{
+		"config": c,
+
+		"config-data":        c.Data,
+		"config-meta":        c.Meta,
+		"config-coordinator": c.Coordinator,
+		"config-retention":   c.Retention,
+		"config-precreator":  c.Precreator,
+
+		"config-monitor":    c.Monitor,
+		"config-subscriber": c.Subscriber,
+		"config-httpd":      c.HTTPD,
+
+		"config-cqs": c.ContinuousQuery,
 	}
 
-	// Make sure we have struct
-	if s.Kind() != reflect.Struct {
-		return nil
+	// Config settings that can be repeated and can be disabled.
+	if g := graphite.Configs(c.GraphiteInputs); g.Enabled() {
+		m["config-graphite"] = g
+	}
+	if cc := collectd.Configs(c.CollectdInputs); cc.Enabled() {
+		m["config-collectd"] = cc
+	}
+	if t := opentsdb.Configs(c.OpenTSDBInputs); t.Enabled() {
+		m["config-opentsdb"] = t
+	}
+	if u := udp.Configs(c.UDPInputs); u.Enabled() {
+		m["config-udp"] = u
 	}
 
-	typeOfSpec := s.Type()
-	for i := 0; i < s.NumField(); i++ {
-		f := s.Field(i)
-		// Get the toml tag to determine what env var name to use
-		configName := typeOfSpec.Field(i).Tag.Get("toml")
-		// Replace hyphens with underscores to avoid issues with shells
-		configName = strings.Replace(configName, "-", "_", -1)
-		fieldKey := typeOfSpec.Field(i).Name
+	return m
+}
 
-		// Skip any fields that we cannot set
-		if f.CanSet() || f.Kind() == reflect.Slice {
-
-			// Use the upper-case prefix and toml name for the env var
-			key := strings.ToUpper(configName)
-			if prefix != "" {
-				key = strings.ToUpper(fmt.Sprintf("%s_%s", prefix, configName))
-			}
-			value := os.Getenv(key)
-
-			// If the type is s slice, apply to each using the index as a suffix
-			// e.g. GRAPHITE_0
-			if f.Kind() == reflect.Slice || f.Kind() == reflect.Array {
-				for i := 0; i < f.Len(); i++ {
-					if err := c.applyEnvOverrides(key, f.Index(i)); err != nil {
-						return err
-					}
-					if err := c.applyEnvOverrides(fmt.Sprintf("%s_%d", key, i), f.Index(i)); err != nil {
-						return err
-					}
-				}
-				continue
-			}
-
-			// If it's a sub-config, recursively apply
-			if f.Kind() == reflect.Struct || f.Kind() == reflect.Ptr {
-				if err := c.applyEnvOverrides(key, f); err != nil {
-					return err
-				}
-				continue
-			}
-
-			// Skip any fields we don't have a value to set
-			if value == "" {
-				continue
-			}
-
-			switch f.Kind() {
-			case reflect.String:
-				f.SetString(value)
-			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-
-				var intValue int64
-
-				// Handle toml.Duration
-				if f.Type().Name() == "Duration" {
-					dur, err := time.ParseDuration(value)
-					if err != nil {
-						return fmt.Errorf("failed to apply %v to %v using type %v and value '%v'", key, fieldKey, f.Type().String(), value)
-					}
-					intValue = dur.Nanoseconds()
-				} else {
-					var err error
-					intValue, err = strconv.ParseInt(value, 0, f.Type().Bits())
-					if err != nil {
-						return fmt.Errorf("failed to apply %v to %v using type %v and value '%v'", key, fieldKey, f.Type().String(), value)
-					}
-				}
-
-				f.SetInt(intValue)
-			case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-				var intValue uint64
-				var err error
-				intValue, err = strconv.ParseUint(value, 0, f.Type().Bits())
-				if err != nil {
-					return fmt.Errorf("failed to apply %v to %v using type %v and value '%v'", key, fieldKey, f.Type().String(), value)
-				}
-
-				f.SetUint(intValue)
-			case reflect.Bool:
-				boolValue, err := strconv.ParseBool(value)
-				if err != nil {
-					return fmt.Errorf("failed to apply %v to %v using type %v and value '%v'", key, fieldKey, f.Type().String(), value)
-
-				}
-				f.SetBool(boolValue)
-			case reflect.Float32, reflect.Float64:
-				floatValue, err := strconv.ParseFloat(value, f.Type().Bits())
-				if err != nil {
-					return fmt.Errorf("failed to apply %v to %v using type %v and value '%v'", key, fieldKey, f.Type().String(), value)
-
-				}
-				f.SetFloat(floatValue)
-			default:
-				if err := c.applyEnvOverrides(key, f); err != nil {
-					return err
-				}
-			}
-		}
+// registerDiagnostics registers the config settings with the Monitor.
+func (c *Config) registerDiagnostics(m *monitor.Monitor) {
+	for name, dc := range c.diagnosticsClients() {
+		m.RegisterDiagnosticsClient(name, dc)
 	}
-	return nil
+}
+
+// registerDiagnostics deregisters the config settings from the Monitor.
+func (c *Config) deregisterDiagnostics(m *monitor.Monitor) {
+	for name := range c.diagnosticsClients() {
+		m.DeregisterDiagnosticsClient(name)
+	}
 }

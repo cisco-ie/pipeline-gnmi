@@ -15,7 +15,7 @@ import (
 
 	"github.com/influxdata/influxdb/client"
 	"github.com/influxdata/influxdb/cmd/influx/cli"
-	"github.com/influxdata/influxdb/influxql"
+	"github.com/influxdata/influxql"
 	"github.com/peterh/liner"
 )
 
@@ -76,6 +76,45 @@ func TestRunCLI_ExecuteInsert(t *testing.T) {
 	}
 }
 
+func TestRunCLI_WithSignals(t *testing.T) {
+	t.Parallel()
+	ts := emptyTestServer()
+	defer ts.Close()
+
+	u, _ := url.Parse(ts.URL)
+	h, p, _ := net.SplitHostPort(u.Host)
+	c := cli.New(CLIENT_VERSION)
+	c.Host = h
+	c.Port, _ = strconv.Atoi(p)
+	c.IgnoreSignals = false
+	c.ForceTTY = true
+	go func() {
+		close(c.Quit)
+	}()
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run failed with error: %s", err)
+	}
+}
+
+func TestRunCLI_ExecuteInsert_WithSignals(t *testing.T) {
+	t.Parallel()
+	ts := emptyTestServer()
+	defer ts.Close()
+
+	u, _ := url.Parse(ts.URL)
+	h, p, _ := net.SplitHostPort(u.Host)
+	c := cli.New(CLIENT_VERSION)
+	c.Host = h
+	c.Port, _ = strconv.Atoi(p)
+	c.ClientConfig.Precision = "ms"
+	c.Execute = "INSERT sensor,floor=1 value=2"
+	c.IgnoreSignals = false
+	c.ForceTTY = true
+	if err := c.Run(); err != nil {
+		t.Fatalf("Run failed with error: %s", err)
+	}
+}
+
 func TestSetAuth(t *testing.T) {
 	t.Parallel()
 	c := cli.New(CLIENT_VERSION)
@@ -108,9 +147,24 @@ func TestSetPrecision(t *testing.T) {
 	if c.ClientConfig.Precision != p {
 		t.Fatalf("Precision is %s but should be %s", c.ClientConfig.Precision, p)
 	}
+	up := "NS"
+	c.SetPrecision("PRECISION " + up)
+	if c.ClientConfig.Precision != p {
+		t.Fatalf("Precision is %s but should be %s", c.ClientConfig.Precision, p)
+	}
+	mixed := "ns"
+	c.SetPrecision("PRECISION " + mixed)
+	if c.ClientConfig.Precision != p {
+		t.Fatalf("Precision is %s but should be %s", c.ClientConfig.Precision, p)
+	}
 
 	// validate set default precision which equals empty string
 	p = "rfc3339"
+	c.SetPrecision("precision " + p)
+	if c.ClientConfig.Precision != "" {
+		t.Fatalf("Precision is %s but should be empty", c.ClientConfig.Precision)
+	}
+	p = "RFC3339"
 	c.SetPrecision("precision " + p)
 	if c.ClientConfig.Precision != "" {
 		t.Fatalf("Precision is %s but should be empty", c.ClientConfig.Precision)
@@ -129,6 +183,88 @@ func TestSetFormat(t *testing.T) {
 	c.SetFormat("format " + f)
 	if c.Format != f {
 		t.Fatalf("Format is %s but should be %s", c.Format, f)
+	}
+
+	uf := "JSON"
+	c.SetFormat("format " + uf)
+	if c.Format != f {
+		t.Fatalf("Format is %s but should be %s", c.Format, f)
+	}
+	mixed := "json"
+	c.SetFormat("FORMAT " + mixed)
+	if c.Format != f {
+		t.Fatalf("Format is %s but should be %s", c.Format, f)
+	}
+}
+
+func Test_SetChunked(t *testing.T) {
+	t.Parallel()
+	c := cli.New(CLIENT_VERSION)
+	config := client.NewConfig()
+	client, _ := client.NewClient(config)
+	c.Client = client
+
+	// make sure chunked is on by default
+	if got, exp := c.Chunked, true; got != exp {
+		t.Fatalf("chunked should be on by default.  got %v, exp %v", got, exp)
+	}
+
+	// turn chunked off
+	if err := c.ParseCommand("Chunked"); err != nil {
+		t.Fatalf("setting chunked failed: err: %s", err)
+	}
+
+	if got, exp := c.Chunked, false; got != exp {
+		t.Fatalf("setting chunked failed.  got %v, exp %v", got, exp)
+	}
+
+	// turn chunked back on
+	if err := c.ParseCommand("Chunked"); err != nil {
+		t.Fatalf("setting chunked failed: err: %s", err)
+	}
+
+	if got, exp := c.Chunked, true; got != exp {
+		t.Fatalf("setting chunked failed.  got %v, exp %v", got, exp)
+	}
+}
+
+func Test_SetChunkSize(t *testing.T) {
+	t.Parallel()
+	c := cli.New(CLIENT_VERSION)
+	config := client.NewConfig()
+	client, _ := client.NewClient(config)
+	c.Client = client
+
+	// check default chunk size
+	if got, exp := c.ChunkSize, 0; got != exp {
+		t.Fatalf("unexpected chunk size.  got %d, exp %d", got, exp)
+	}
+
+	tests := []struct {
+		command string
+		exp     int
+	}{
+		{"chunk size 20", 20},
+		{"   CHunk     siZE  55    ", 55},
+		{"chunk 10", 10},
+		{"     chuNK     15", 15},
+		{"chunk size -60", 0},
+		{"chunk size 10", 10},
+		{"chunk size 0", 0},
+		{"chunk size 10", 10},
+		{"chunk size junk", 10},
+	}
+
+	for _, test := range tests {
+		if err := c.ParseCommand(test.command); err != nil {
+			t.Logf("command: %q", test.command)
+			t.Fatalf("setting chunked failed: err: %s", err)
+		}
+
+		if got, exp := c.ChunkSize, test.exp; got != exp {
+			t.Logf("command: %q", test.command)
+			t.Fatalf("unexpected chunk size.  got %d, exp %d", got, exp)
+		}
 	}
 }
 
@@ -149,6 +285,18 @@ func TestSetWriteConsistency(t *testing.T) {
 	// set different valid write consistency and validate change
 	consistency = "quorum"
 	c.SetWriteConsistency("consistency " + consistency)
+	if c.ClientConfig.WriteConsistency != consistency {
+		t.Fatalf("WriteConsistency is %s but should be %s", c.ClientConfig.WriteConsistency, consistency)
+	}
+
+	consistency = "QUORUM"
+	c.SetWriteConsistency("consistency " + consistency)
+	if c.ClientConfig.WriteConsistency != "quorum" {
+		t.Fatalf("WriteConsistency is %s but should be %s", c.ClientConfig.WriteConsistency, "quorum")
+	}
+
+	consistency = "quorum"
+	c.SetWriteConsistency("CONSISTENCY " + consistency)
 	if c.ClientConfig.WriteConsistency != consistency {
 		t.Fatalf("WriteConsistency is %s but should be %s", c.ClientConfig.WriteConsistency, consistency)
 	}
@@ -278,13 +426,16 @@ func TestParseCommand_Use(t *testing.T) {
 
 	tests := []struct {
 		cmd string
+		db  string
 	}{
-		{cmd: "use db"},
-		{cmd: " use db"},
-		{cmd: "use db "},
-		{cmd: "use db;"},
-		{cmd: "use db; "},
-		{cmd: "Use db"},
+		{cmd: "use db", db: "db"},
+		{cmd: " use db", db: "db"},
+		{cmd: "use db ", db: "db"},
+		{cmd: "use db;", db: "db"},
+		{cmd: "use db; ", db: "db"},
+		{cmd: "Use db", db: "db"},
+		{cmd: `Use "db"`, db: "db"},
+		{cmd: `Use "db db"`, db: "db db"},
 	}
 
 	for _, test := range tests {
@@ -293,8 +444,8 @@ func TestParseCommand_Use(t *testing.T) {
 			t.Fatalf(`Got error %v for command %q, expected nil.`, err, test.cmd)
 		}
 
-		if m.Database != "db" {
-			t.Fatalf(`Command "use" changed database to %q. Expected db`, m.Database)
+		if m.Database != test.db {
+			t.Fatalf(`Command "%s" changed database to %q. Expected %s`, test.cmd, m.Database, test.db)
 		}
 	}
 }
@@ -508,7 +659,7 @@ func emptyTestServer() *httptest.Server {
 			switch stmt.(type) {
 			case *influxql.ShowDatabasesStatement:
 				if authorized {
-					io.WriteString(w, `{"results":[{"series":[{"name":"databases","columns":["name"],"values":[["db"]]}]}]}`)
+					io.WriteString(w, `{"results":[{"series":[{"name":"databases","columns":["name"],"values":[["db", "db db"]]}]}]}`)
 				} else {
 					w.WriteHeader(http.StatusUnauthorized)
 					io.WriteString(w, fmt.Sprintf(`{"error":"error authorizing query: %s not authorized to execute statement 'SHOW DATABASES', requires admin privilege"}`, user))

@@ -2,6 +2,7 @@ package sarama
 
 import (
 	"crypto/rand"
+	"hash/fnv"
 	"log"
 	"testing"
 )
@@ -70,6 +71,55 @@ func TestRoundRobinPartitioner(t *testing.T) {
 	}
 }
 
+func TestNewHashPartitionerWithHasher(t *testing.T) {
+	// use the current default hasher fnv.New32a()
+	partitioner := NewCustomHashPartitioner(fnv.New32a)("mytopic")
+
+	choice, err := partitioner.Partition(&ProducerMessage{}, 1)
+	if err != nil {
+		t.Error(partitioner, err)
+	}
+	if choice != 0 {
+		t.Error("Returned non-zero partition when only one available.")
+	}
+
+	for i := 1; i < 50; i++ {
+		choice, err := partitioner.Partition(&ProducerMessage{}, 50)
+		if err != nil {
+			t.Error(partitioner, err)
+		}
+		if choice < 0 || choice >= 50 {
+			t.Error("Returned partition", choice, "outside of range for nil key.")
+		}
+	}
+
+	buf := make([]byte, 256)
+	for i := 1; i < 50; i++ {
+		if _, err := rand.Read(buf); err != nil {
+			t.Error(err)
+		}
+		assertPartitioningConsistent(t, partitioner, &ProducerMessage{Key: ByteEncoder(buf)}, 50)
+	}
+}
+
+func TestHashPartitionerWithHasherMinInt32(t *testing.T) {
+	// use the current default hasher fnv.New32a()
+	partitioner := NewCustomHashPartitioner(fnv.New32a)("mytopic")
+
+	msg := ProducerMessage{}
+	// "1468509572224" generates 2147483648 (uint32) result from Sum32 function
+	// which is -2147483648 or int32's min value
+	msg.Key = StringEncoder("1468509572224")
+
+	choice, err := partitioner.Partition(&msg, 50)
+	if err != nil {
+		t.Error(partitioner, err)
+	}
+	if choice < 0 || choice >= 50 {
+		t.Error("Returned partition", choice, "outside of range for nil key.")
+	}
+}
+
 func TestHashPartitioner(t *testing.T) {
 	partitioner := NewHashPartitioner("mytopic")
 
@@ -97,6 +147,24 @@ func TestHashPartitioner(t *testing.T) {
 			t.Error(err)
 		}
 		assertPartitioningConsistent(t, partitioner, &ProducerMessage{Key: ByteEncoder(buf)}, 50)
+	}
+}
+
+func TestHashPartitionerConsistency(t *testing.T) {
+	partitioner := NewHashPartitioner("mytopic")
+	ep, ok := partitioner.(DynamicConsistencyPartitioner)
+
+	if !ok {
+		t.Error("Hash partitioner does not implement DynamicConsistencyPartitioner")
+	}
+
+	consistency := ep.MessageRequiresConsistency(&ProducerMessage{Key: StringEncoder("hi")})
+	if !consistency {
+		t.Error("Messages with keys should require consistency")
+	}
+	consistency = ep.MessageRequiresConsistency(&ProducerMessage{})
+	if consistency {
+		t.Error("Messages without keys should require consistency")
 	}
 }
 

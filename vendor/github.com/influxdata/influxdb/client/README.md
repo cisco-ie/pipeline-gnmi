@@ -61,26 +61,26 @@ const (
 	password = "bumblebeetuna"
 )
 
+
 func main() {
-	// Make client
+	// Create a new HTTPClient
 	c, err := client.NewHTTPClient(client.HTTPConfig{
-		Addr: "http://localhost:8086",
+		Addr:     "http://localhost:8086",
 		Username: username,
 		Password: password,
 	})
-
 	if err != nil {
-	    log.Fatalln("Error: ", err)
+		log.Fatal(err)
 	}
-
+	defer c.Close()
+	
 	// Create a new point batch
 	bp, err := client.NewBatchPoints(client.BatchPointsConfig{
 		Database:  MyDB,
 		Precision: "s",
 	})
-
 	if err != nil {
-	    log.Fatalln("Error: ", err)
+		log.Fatal(err)
 	}
 
 	// Create a point and add to batch
@@ -90,16 +90,22 @@ func main() {
 		"system": 53.3,
 		"user":   46.6,
 	}
+
 	pt, err := client.NewPoint("cpu_usage", tags, fields, time.Now())
-
 	if err != nil {
-	    log.Fatalln("Error: ", err)
+		log.Fatal(err)
 	}
-
 	bp.AddPoint(pt)
 
 	// Write the batch
-	c.Write(bp)
+	if err := c.Write(bp); err != nil {
+		log.Fatal(err)
+	}
+	
+	// Close client resources
+	if err := c.Close(); err != nil {
+    		log.Fatal(err)
+	}
 }
 
 ```
@@ -119,15 +125,19 @@ NOTE: You can specify a RetentionPolicy as part of the batch points. If not
 provided InfluxDB will use the database _default_ retention policy.
 
 ```go
+
 func writePoints(clnt client.Client) {
 	sampleSize := 1000
-	rand.Seed(42)
 
-	bp, _ := client.NewBatchPoints(client.BatchPointsConfig{
+	bp, err := client.NewBatchPoints(client.BatchPointsConfig{
 		Database:  "systemstats",
 		Precision: "us",
 	})
+	if err != nil {
+		log.Fatal(err)
+	}
 
+    rand.Seed(time.Now().UnixNano())
 	for i := 0; i < sampleSize; i++ {
 		regions := []string{"us-west1", "us-west2", "us-west3", "us-east1"}
 		tags := map[string]string{
@@ -142,21 +152,31 @@ func writePoints(clnt client.Client) {
 			"busy": 100.0 - idle,
 		}
 
-		bp.AddPoint(client.NewPoint(
+		pt, err := client.NewPoint(
 			"cpu_usage",
 			tags,
 			fields,
 			time.Now(),
-		))
+		)
+		if err != nil {
+			log.Fatal(err)
+		}
+		bp.AddPoint(pt)
 	}
 
-	err := clnt.Write(bp)
-	if err != nil {
+	if err := clnt.Write(bp); err != nil {
 		log.Fatal(err)
 	}
 }
 ```
 
+#### Uint64 Support
+
+The `uint64` data type is supported if your server is version `1.4.0` or
+greater. To write a data point as an unsigned integer, you must insert
+the point as `uint64`. You cannot use `uint` or any of the other
+derivatives because previous versions of the client have supported
+writing those types as an integer.
 
 ### Querying Data
 
@@ -207,7 +227,7 @@ log.Printf("Found a total of %v records\n", count)
 #### Find the last 10 _shapes_ records
 
 ```go
-q := fmt.Sprintf("SELECT * FROM %s LIMIT %d", MyMeasurement, 20)
+q := fmt.Sprintf("SELECT * FROM %s LIMIT %d", MyMeasurement, 10)
 res, err = queryDB(clnt, q)
 if err != nil {
 	log.Fatal(err)

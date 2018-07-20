@@ -3,17 +3,36 @@ package cluster
 import (
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/Shopify/sarama"
 )
 
+// PartitionConsumer allows code to consume individual partitions from the cluster.
+//
+// See docs for Consumer.Partitions() for more on how to implement this.
+type PartitionConsumer interface {
+	sarama.PartitionConsumer
+
+	// Topic returns the consumed topic name
+	Topic() string
+
+	// Partition returns the consumed partition
+	Partition() int32
+}
+
 type partitionConsumer struct {
-	pcm sarama.PartitionConsumer
+	sarama.PartitionConsumer
 
 	state partitionState
 	mu    sync.Mutex
 
-	closed      bool
+	topic     string
+	partition int32
+
+	closeOnce sync.Once
+	closeErr  error
+
 	dying, dead chan none
 }
 
@@ -30,54 +49,95 @@ func newPartitionConsumer(manager sarama.Consumer, topic string, partition int32
 	}
 
 	return &partitionConsumer{
-		pcm:   pcm,
-		state: partitionState{Info: info},
+		PartitionConsumer: pcm,
+		state:             partitionState{Info: info},
+
+		topic:     topic,
+		partition: partition,
 
 		dying: make(chan none),
 		dead:  make(chan none),
 	}, nil
 }
 
-func (c *partitionConsumer) Loop(messages chan<- *sarama.ConsumerMessage, errors chan<- error) {
+// Topic implements PartitionConsumer
+func (c *partitionConsumer) Topic() string { return c.topic }
+
+// Partition implements PartitionConsumer
+func (c *partitionConsumer) Partition() int32 { return c.partition }
+
+// AsyncClose implements PartitionConsumer
+func (c *partitionConsumer) AsyncClose() {
+	c.closeOnce.Do(func() {
+		c.closeErr = c.PartitionConsumer.Close()
+		close(c.dying)
+	})
+}
+
+// Close implements PartitionConsumer
+func (c *partitionConsumer) Close() error {
+	c.AsyncClose()
+	<-c.dead
+	return c.closeErr
+}
+
+func (c *partitionConsumer) WaitFor(stopper <-chan none, errors chan<- error) {
 	defer close(c.dead)
 
 	for {
 		select {
-		case msg, ok := <-c.pcm.Messages():
-			if !ok {
-				return
-			}
-			select {
-			case messages <- msg:
-			case <-c.dying:
-				return
-			}
-		case err, ok := <-c.pcm.Errors():
+		case err, ok := <-c.Errors():
 			if !ok {
 				return
 			}
 			select {
 			case errors <- err:
+			case <-stopper:
+				return
 			case <-c.dying:
 				return
 			}
+		case <-stopper:
+			return
 		case <-c.dying:
 			return
 		}
 	}
 }
 
-func (c *partitionConsumer) Close() error {
-	if c.closed {
-		return nil
+func (c *partitionConsumer) Multiplex(stopper <-chan none, messages chan<- *sarama.ConsumerMessage, errors chan<- error) {
+	defer close(c.dead)
+
+	for {
+		select {
+		case msg, ok := <-c.Messages():
+			if !ok {
+				return
+			}
+			select {
+			case messages <- msg:
+			case <-stopper:
+				return
+			case <-c.dying:
+				return
+			}
+		case err, ok := <-c.Errors():
+			if !ok {
+				return
+			}
+			select {
+			case errors <- err:
+			case <-stopper:
+				return
+			case <-c.dying:
+				return
+			}
+		case <-stopper:
+			return
+		case <-c.dying:
+			return
+		}
 	}
-
-	err := c.pcm.Close()
-	c.closed = true
-	close(c.dying)
-	<-c.dead
-
-	return err
 }
 
 func (c *partitionConsumer) State() partitionState {
@@ -118,11 +178,26 @@ func (c *partitionConsumer) MarkOffset(offset int64, metadata string) {
 	c.mu.Unlock()
 }
 
+func (c *partitionConsumer) ResetOffset(offset int64, metadata string) {
+	if c == nil {
+		return
+	}
+
+	c.mu.Lock()
+	if offset <= c.state.Info.Offset {
+		c.state.Info.Offset = offset
+		c.state.Info.Metadata = metadata
+		c.state.Dirty = true
+	}
+	c.mu.Unlock()
+}
+
 // --------------------------------------------------------------------
 
 type partitionState struct {
-	Info  offsetInfo
-	Dirty bool
+	Info       offsetInfo
+	Dirty      bool
+	LastCommit time.Time
 }
 
 // --------------------------------------------------------------------
@@ -138,6 +213,18 @@ func newPartitionMap() *partitionMap {
 	}
 }
 
+func (m *partitionMap) IsSubscribedTo(topic string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	for tp := range m.data {
+		if tp.Topic == topic {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *partitionMap) Fetch(topic string, partition int32) *partitionConsumer {
 	m.mu.RLock()
 	pc, _ := m.data[topicPartition{topic, partition}]
@@ -149,18 +236,6 @@ func (m *partitionMap) Store(topic string, partition int32, pc *partitionConsume
 	m.mu.Lock()
 	m.data[topicPartition{topic, partition}] = pc
 	m.mu.Unlock()
-}
-
-func (m *partitionMap) HasDirty() bool {
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	for _, pc := range m.data {
-		if state := pc.State(); state.Dirty {
-			return true
-		}
-	}
-	return false
 }
 
 func (m *partitionMap) Snapshot() map[topicPartition]partitionState {

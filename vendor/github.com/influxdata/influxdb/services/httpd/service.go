@@ -1,3 +1,4 @@
+// Package httpd implements the HTTP service and REST API for InfluxDB.
 package httpd // import "github.com/influxdata/influxdb/services/httpd"
 
 import (
@@ -18,24 +19,29 @@ import (
 
 // statistics gathered by the httpd package.
 const (
-	statRequest                      = "req"                  // Number of HTTP requests served
-	statQueryRequest                 = "queryReq"             // Number of query requests served
-	statWriteRequest                 = "writeReq"             // Number of write requests serverd
-	statPingRequest                  = "pingReq"              // Number of ping requests served
-	statStatusRequest                = "statusReq"            // Number of status requests served
-	statWriteRequestBytesReceived    = "writeReqBytes"        // Sum of all bytes in write requests
-	statQueryRequestBytesTransmitted = "queryRespBytes"       // Sum of all bytes returned in query reponses
-	statPointsWrittenOK              = "pointsWrittenOK"      // Number of points written OK
-	statPointsWrittenDropped         = "pointsWrittenDropped" // Number of points dropped by the storage engine
-	statPointsWrittenFail            = "pointsWrittenFail"    // Number of points that failed to be written
-	statAuthFail                     = "authFail"             // Number of authentication failures
-	statRequestDuration              = "reqDurationNs"        // Number of (wall-time) nanoseconds spent inside requests
-	statQueryRequestDuration         = "queryReqDurationNs"   // Number of (wall-time) nanoseconds spent inside query requests
-	statWriteRequestDuration         = "writeReqDurationNs"   // Number of (wall-time) nanoseconds spent inside write requests
-	statRequestsActive               = "reqActive"            // Number of currently active requests
-	statWriteRequestsActive          = "writeReqActive"       // Number of currently active write requests
-	statClientError                  = "clientError"          // Number of HTTP responses due to client error
-	statServerError                  = "serverError"          // Number of HTTP responses due to server error
+	statRequest                      = "req"                  // Number of HTTP requests served.
+	statQueryRequest                 = "queryReq"             // Number of query requests served.
+	statWriteRequest                 = "writeReq"             // Number of write requests serverd.
+	statPingRequest                  = "pingReq"              // Number of ping requests served.
+	statStatusRequest                = "statusReq"            // Number of status requests served.
+	statWriteRequestBytesReceived    = "writeReqBytes"        // Sum of all bytes in write requests.
+	statQueryRequestBytesTransmitted = "queryRespBytes"       // Sum of all bytes returned in query reponses.
+	statPointsWrittenOK              = "pointsWrittenOK"      // Number of points written OK.
+	statPointsWrittenDropped         = "pointsWrittenDropped" // Number of points dropped by the storage engine.
+	statPointsWrittenFail            = "pointsWrittenFail"    // Number of points that failed to be written.
+	statAuthFail                     = "authFail"             // Number of authentication failures.
+	statRequestDuration              = "reqDurationNs"        // Number of (wall-time) nanoseconds spent inside requests.
+	statQueryRequestDuration         = "queryReqDurationNs"   // Number of (wall-time) nanoseconds spent inside query requests.
+	statWriteRequestDuration         = "writeReqDurationNs"   // Number of (wall-time) nanoseconds spent inside write requests.
+	statRequestsActive               = "reqActive"            // Number of currently active requests.
+	statWriteRequestsActive          = "writeReqActive"       // Number of currently active write requests.
+	statClientError                  = "clientError"          // Number of HTTP responses due to client error.
+	statServerError                  = "serverError"          // Number of HTTP responses due to server error.
+	statRecoveredPanics              = "recoveredPanics"      // Number of panics recovered by HTTP handler.
+
+	// Prometheus stats
+	statPromWriteRequest = "promWriteReq" // Number of write requests to the promtheus endpoint
+	statPromReadRequest  = "promReadReq"  // Number of read requests to the prometheus endpoint
 )
 
 // Service manages the listener and handler for an HTTP endpoint.
@@ -49,39 +55,46 @@ type Service struct {
 	err   chan error
 
 	unixSocket         bool
+	unixSocketPerm     uint32
+	unixSocketGroup    int
 	bindSocket         string
 	unixSocketListener net.Listener
 
 	Handler *Handler
 
-	Logger zap.Logger
+	Logger *zap.Logger
 }
 
 // NewService returns a new instance of Service.
 func NewService(c Config) *Service {
 	s := &Service{
-		addr:       c.BindAddress,
-		https:      c.HTTPSEnabled,
-		cert:       c.HTTPSCertificate,
-		key:        c.HTTPSPrivateKey,
-		limit:      c.MaxConnectionLimit,
-		err:        make(chan error),
-		unixSocket: c.UnixSocketEnabled,
-		bindSocket: c.BindSocket,
-		Handler:    NewHandler(c),
-		Logger:     zap.New(zap.NullEncoder()),
+		addr:           c.BindAddress,
+		https:          c.HTTPSEnabled,
+		cert:           c.HTTPSCertificate,
+		key:            c.HTTPSPrivateKey,
+		limit:          c.MaxConnectionLimit,
+		err:            make(chan error),
+		unixSocket:     c.UnixSocketEnabled,
+		unixSocketPerm: uint32(c.UnixSocketPermissions),
+		bindSocket:     c.BindSocket,
+		Handler:        NewHandler(c),
+		Logger:         zap.NewNop(),
 	}
 	if s.key == "" {
 		s.key = s.cert
+	}
+	if c.UnixSocketGroup != nil {
+		s.unixSocketGroup = int(*c.UnixSocketGroup)
 	}
 	s.Handler.Logger = s.Logger
 	return s
 }
 
-// Open starts the service
+// Open starts the service.
 func (s *Service) Open() error {
-	s.Logger.Info("Starting HTTP service")
-	s.Logger.Info(fmt.Sprint("Authentication enabled:", s.Handler.Config.AuthEnabled))
+	s.Logger.Info("Starting HTTP service", zap.Bool("authentication", s.Handler.Config.AuthEnabled))
+
+	s.Handler.Open()
 
 	// Open listener.
 	if s.https {
@@ -97,7 +110,6 @@ func (s *Service) Open() error {
 			return err
 		}
 
-		s.Logger.Info(fmt.Sprint("Listening on HTTPS:", listener.Addr().String()))
 		s.ln = listener
 	} else {
 		listener, err := net.Listen("tcp", s.addr)
@@ -105,9 +117,11 @@ func (s *Service) Open() error {
 			return err
 		}
 
-		s.Logger.Info(fmt.Sprint("Listening on HTTP:", listener.Addr().String()))
 		s.ln = listener
 	}
+	s.Logger.Info("Listening on HTTP",
+		zap.Stringer("addr", s.ln.Addr()),
+		zap.Bool("https", s.https))
 
 	// Open unix socket listener.
 	if s.unixSocket {
@@ -125,8 +139,19 @@ func (s *Service) Open() error {
 		if err != nil {
 			return err
 		}
+		if s.unixSocketPerm != 0 {
+			if err := os.Chmod(s.bindSocket, os.FileMode(s.unixSocketPerm)); err != nil {
+				return err
+			}
+		}
+		if s.unixSocketGroup != 0 {
+			if err := os.Chown(s.bindSocket, -1, s.unixSocketGroup); err != nil {
+				return err
+			}
+		}
 
-		s.Logger.Info(fmt.Sprint("Listening on unix socket:", listener.Addr().String()))
+		s.Logger.Info("Listening on unix socket",
+			zap.Stringer("addr", listener.Addr()))
 		s.unixSocketListener = listener
 
 		go s.serveUnixSocket()
@@ -157,6 +182,8 @@ func (s *Service) Open() error {
 
 // Close closes the underlying listener.
 func (s *Service) Close() error {
+	s.Handler.Close()
+
 	if s.ln != nil {
 		if err := s.ln.Close(); err != nil {
 			return err
@@ -170,11 +197,11 @@ func (s *Service) Close() error {
 	return nil
 }
 
-// SetLogOutput sets the writer to which all logs are written. It must not be
-// called after Open is called.
-func (s *Service) WithLogger(log zap.Logger) {
+// WithLogger sets the logger for the service.
+func (s *Service) WithLogger(log *zap.Logger) {
 	s.Logger = log.With(zap.String("service", "httpd"))
 	s.Handler.Logger = s.Logger
+	s.Handler.Store.WithLogger(s.Logger)
 }
 
 // Err returns a channel for fatal errors that occur on the listener.
@@ -191,6 +218,12 @@ func (s *Service) Addr() net.Addr {
 // Statistics returns statistics for periodic monitoring.
 func (s *Service) Statistics(tags map[string]string) []models.Statistic {
 	return s.Handler.Statistics(models.NewTags(map[string]string{"bind": s.addr}).Merge(tags).Map())
+}
+
+// BoundHTTPAddr returns the string version of the address that the HTTP server is listening on.
+// This is useful if you start an ephemeral server in test with bind address localhost:0.
+func (s *Service) BoundHTTPAddr() string {
+	return s.ln.Addr().String()
 }
 
 // serveTCP serves the handler from the TCP listener.

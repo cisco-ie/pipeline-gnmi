@@ -12,8 +12,8 @@ func TestRing_newRing(t *testing.T) {
 		n         int
 		returnErr bool
 	}{
-		{n: 1}, {n: 2}, {n: 4}, {n: 8}, {n: 16}, {n: 32}, {n: 64}, {n: 128}, {n: 256},
-		{n: 0, returnErr: true}, {n: 3, returnErr: true}, {n: 512, returnErr: true},
+		{n: 1}, {n: 2}, {n: 4}, {n: 8}, {n: 16}, {n: 32, returnErr: true},
+		{n: 0, returnErr: true}, {n: 3, returnErr: true},
 	}
 
 	for i, example := range examples {
@@ -31,7 +31,7 @@ func TestRing_newRing(t *testing.T) {
 
 		// Check partitions distributed correctly
 		partitions := make([]*partition, 0)
-		for i, partition := range r.continuum {
+		for i, partition := range r.partitions {
 			if i == 0 || partition != partitions[len(partitions)-1] {
 				partitions = append(partitions, partition)
 			}
@@ -43,12 +43,12 @@ func TestRing_newRing(t *testing.T) {
 	}
 }
 
-var strSliceRes []string
+var strSliceRes [][]byte
 
 func benchmarkRingkeys(b *testing.B, r *ring, keys int) {
 	// Add some keys
 	for i := 0; i < keys; i++ {
-		r.add(fmt.Sprintf("cpu,host=server-%d value=1", i), nil)
+		r.add([]byte(fmt.Sprintf("cpu,host=server-%d value=1", i)), nil)
 	}
 
 	b.ReportAllocs()
@@ -63,20 +63,53 @@ func BenchmarkRing_keys_1000(b *testing.B)   { benchmarkRingkeys(b, MustNewRing(
 func BenchmarkRing_keys_10000(b *testing.B)  { benchmarkRingkeys(b, MustNewRing(256), 10000) }
 func BenchmarkRing_keys_100000(b *testing.B) { benchmarkRingkeys(b, MustNewRing(256), 100000) }
 
+func benchmarkRingGetPartition(b *testing.B, r *ring, keys int) {
+	vals := make([][]byte, keys)
+
+	// Add some keys
+	for i := 0; i < keys; i++ {
+		vals[i] = []byte(fmt.Sprintf("cpu,host=server-%d field1=value1,field2=value2,field4=value4,field5=value5,field6=value6,field7=value7,field8=value1,field9=value2,field10=value4,field11=value5,field12=value6,field13=value7", i))
+		r.add(vals[i], nil)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		r.getPartition(vals[i%keys])
+	}
+}
+
+func BenchmarkRing_getPartition_100(b *testing.B) { benchmarkRingGetPartition(b, MustNewRing(256), 100) }
+func BenchmarkRing_getPartition_1000(b *testing.B) {
+	benchmarkRingGetPartition(b, MustNewRing(256), 1000)
+}
+
 func benchmarkRingWrite(b *testing.B, r *ring, n int) {
+	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
 		var wg sync.WaitGroup
 		for i := 0; i < runtime.GOMAXPROCS(0); i++ {
+			errC := make(chan error)
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
 				for j := 0; j < n; j++ {
-					if err := r.write(fmt.Sprintf("cpu,host=server-%d value=1", j), Values{}); err != nil {
-						b.Fatal(err)
+					if _, err := r.write([]byte(fmt.Sprintf("cpu,host=server-%d value=1", j)), Values{}); err != nil {
+						errC <- err
 					}
 				}
 			}()
-			wg.Wait()
+
+			go func() {
+				wg.Wait()
+				close(errC)
+			}()
+
+			for err := range errC {
+				if err != nil {
+					b.Error(err)
+				}
+			}
 		}
 	}
 }

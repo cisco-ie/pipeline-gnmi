@@ -1,9 +1,7 @@
 package meta_test
 
 import (
-	"encoding/json"
 	"io/ioutil"
-	"net"
 	"os"
 	"path"
 	"reflect"
@@ -14,8 +12,8 @@ import (
 
 	"github.com/influxdata/influxdb"
 
-	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxql"
 )
 
 func TestMetaClient_CreateDatabaseOnly(t *testing.T) {
@@ -79,6 +77,12 @@ func TestMetaClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	defer os.RemoveAll(d)
 	defer c.Close()
 
+	// Calling CreateDatabaseWithRetentionPolicy with a nil spec should return
+	// an error
+	if _, err := c.CreateDatabaseWithRetentionPolicy("db0", nil); err == nil {
+		t.Fatal("expected error")
+	}
+
 	duration := 1 * time.Hour
 	replicaN := 1
 	spec := meta.RetentionPolicySpec{
@@ -115,8 +119,46 @@ func TestMetaClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// If the rp's duration is different, an error should be returned.
+	// If create database is used by itself, no error should be returned and
+	// the default retention policy should not be changed.
+	if dbi, err := c.CreateDatabase("db0"); err != nil {
+		t.Fatalf("got %v, but expected %v", err, nil)
+	} else if dbi.DefaultRetentionPolicy != "rp0" {
+		t.Fatalf("got %v, but expected %v", dbi.DefaultRetentionPolicy, "rp0")
+	} else if got, exp := len(dbi.RetentionPolicies), 1; got != exp {
+		// Ensure no additional retention policies were created.
+		t.Fatalf("got %v, but expected %v", got, exp)
+	}
+}
+
+func TestMetaClient_CreateDatabaseWithRetentionPolicy_Conflict_Fields(t *testing.T) {
+	t.Parallel()
+
+	d, c := newClient()
+	defer os.RemoveAll(d)
+	defer c.Close()
+
+	duration := 1 * time.Hour
+	replicaN := 1
+	spec := meta.RetentionPolicySpec{
+		Name:               "rp0",
+		Duration:           &duration,
+		ReplicaN:           &replicaN,
+		ShardGroupDuration: 60 * time.Minute,
+	}
+	if _, err := c.CreateDatabaseWithRetentionPolicy("db0", &spec); err != nil {
+		t.Fatal(err)
+	}
+
+	// If the rp's name is different, and error should be returned.
 	spec2 := spec
+	spec2.Name = spec.Name + "1"
+	if _, err := c.CreateDatabaseWithRetentionPolicy("db0", &spec2); err != meta.ErrRetentionPolicyConflict {
+		t.Fatalf("got %v, but expected %v", err, meta.ErrRetentionPolicyConflict)
+	}
+
+	// If the rp's duration is different, an error should be returned.
+	spec2 = spec
 	duration2 := *spec.Duration + time.Minute
 	spec2.Duration = &duration2
 	if _, err := c.CreateDatabaseWithRetentionPolicy("db0", &spec2); err != meta.ErrRetentionPolicyConflict {
@@ -137,16 +179,40 @@ func TestMetaClient_CreateDatabaseWithRetentionPolicy(t *testing.T) {
 	if _, err := c.CreateDatabaseWithRetentionPolicy("db0", &spec2); err != meta.ErrRetentionPolicyConflict {
 		t.Fatalf("got %v, but expected %v", err, meta.ErrRetentionPolicyConflict)
 	}
+}
 
-	// If create database is used by itself, no error should be returned and
-	// the default retention policy should not be changed.
-	if dbi, err := c.CreateDatabase("db0"); err != nil {
-		t.Fatalf("got %v, but expected %v", err, nil)
-	} else if dbi.DefaultRetentionPolicy != "rp0" {
-		t.Fatalf("got %v, but expected %v", dbi.DefaultRetentionPolicy, "rp0")
-	} else if got, exp := len(dbi.RetentionPolicies), 1; got != exp {
-		// Ensure no additional retention policies were created.
-		t.Fatalf("got %v, but expected %v", got, exp)
+func TestMetaClient_CreateDatabaseWithRetentionPolicy_Conflict_NonDefault(t *testing.T) {
+	t.Parallel()
+
+	d, c := newClient()
+	defer os.RemoveAll(d)
+	defer c.Close()
+
+	duration := 1 * time.Hour
+	replicaN := 1
+	spec := meta.RetentionPolicySpec{
+		Name:               "rp0",
+		Duration:           &duration,
+		ReplicaN:           &replicaN,
+		ShardGroupDuration: 60 * time.Minute,
+	}
+
+	// Create a default retention policy.
+	if _, err := c.CreateDatabaseWithRetentionPolicy("db0", &spec); err != nil {
+		t.Fatal(err)
+	}
+
+	// Let's create a non-default retention policy.
+	spec2 := spec
+	spec2.Name = "rp1"
+	if _, err := c.CreateRetentionPolicy("db0", &spec2, false); err != nil {
+		t.Fatal(err)
+	}
+
+	// If we try to create a database with the non-default retention policy then
+	// it's an error.
+	if _, err := c.CreateDatabaseWithRetentionPolicy("db0", &spec2); err != meta.ErrRetentionPolicyConflict {
+		t.Fatalf("got %v, but expected %v", err, meta.ErrRetentionPolicyConflict)
 	}
 }
 
@@ -530,15 +596,15 @@ func TestMetaClient_CreateUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exp, got := "fred", u.Name; exp != got {
+	if exp, got := "fred", u.ID(); exp != got {
 		t.Fatalf("unexpected user name: exp: %s got: %s", exp, got)
 	}
-	if !u.Admin {
+	if !isAdmin(u) {
 		t.Fatalf("expected user to be admin")
 	}
 
 	u, err = c.Authenticate("fred", "supersecure")
-	if u == nil || err != nil || u.Name != "fred" {
+	if u == nil || err != nil || u.ID() != "fred" {
 		t.Fatalf("failed to authenticate")
 	}
 
@@ -567,7 +633,7 @@ func TestMetaClient_CreateUser(t *testing.T) {
 
 	// Auth for new password should succeed.
 	u, err = c.Authenticate("fred", "moresupersecure")
-	if u == nil || err != nil || u.Name != "fred" {
+	if u == nil || err != nil || u.ID() != "fred" {
 		t.Fatalf("failed to authenticate")
 	}
 
@@ -581,10 +647,10 @@ func TestMetaClient_CreateUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exp, got := "wilma", u.Name; exp != got {
+	if exp, got := "wilma", u.ID(); exp != got {
 		t.Fatalf("unexpected user name: exp: %s got: %s", exp, got)
 	}
-	if u.Admin {
+	if isAdmin(u) {
 		t.Fatalf("expected user not to be an admin")
 	}
 
@@ -601,10 +667,10 @@ func TestMetaClient_CreateUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exp, got := "wilma", u.Name; exp != got {
+	if exp, got := "wilma", u.ID(); exp != got {
 		t.Fatalf("unexpected user name: exp: %s got: %s", exp, got)
 	}
-	if !u.Admin {
+	if !isAdmin(u) {
 		t.Fatalf("expected user to be an admin")
 	}
 
@@ -617,10 +683,10 @@ func TestMetaClient_CreateUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if exp, got := "wilma", u.Name; exp != got {
+	if exp, got := "wilma", u.ID(); exp != got {
 		t.Fatalf("unexpected user name: exp: %s got: %s", exp, got)
 	}
-	if u.Admin {
+	if isAdmin(u) {
 		t.Fatalf("expected user not to be an admin")
 	}
 
@@ -670,13 +736,25 @@ func TestMetaClient_CreateUser(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	u, err = c.User("wilma")
-	if err != meta.ErrUserNotFound {
+	if _, err = c.User("wilma"); err != meta.ErrUserNotFound {
 		t.Fatalf("user lookup should fail with %s", meta.ErrUserNotFound)
 	}
 
 	if exp, got := 1, c.UserCount(); exp != got {
 		t.Fatalf("unexpected user count.  got: %d exp: %d", got, exp)
+	}
+}
+
+func TestMetaClient_UpdateUser(t *testing.T) {
+	t.Parallel()
+
+	d, c := newClient()
+	defer os.RemoveAll(d)
+	defer c.Close()
+
+	// UpdateUser that doesn't exist should return an error.
+	if err := c.UpdateUser("foo", "bar"); err == nil {
+		t.Fatalf("expected error, got nil")
 	}
 }
 
@@ -727,6 +805,11 @@ func TestMetaClient_ContinuousQueries(t *testing.T) {
 
 	// Drop a single CQ
 	if err := c.DropContinuousQuery("db0", "cq1"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Dropping a nonexistent CQ should not return an error.
+	if err := c.DropContinuousQuery("db0", "not-a-cq"); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -954,10 +1037,14 @@ func TestMetaClient_PruneShardGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if _, err := c.CreateDatabase("db1"); err != nil {
+		t.Fatal(err)
+	}
+
 	duration := 1 * time.Hour
 	replicaN := 1
 
-	if _, err := c.CreateRetentionPolicy("db0", &meta.RetentionPolicySpec{
+	if _, err := c.CreateRetentionPolicy("db1", &meta.RetentionPolicySpec{
 		Name:     "rp0",
 		Duration: &duration,
 		ReplicaN: &replicaN,
@@ -965,14 +1052,21 @@ func TestMetaClient_PruneShardGroups(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	sg, err := c.CreateShardGroup("db0", "autogen", time.Now())
+	sg, err := c.CreateShardGroup("db1", "autogen", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	} else if sg == nil {
 		t.Fatalf("expected ShardGroup")
 	}
 
-	sg, err = c.CreateShardGroup("db0", "rp0", time.Now())
+	sg, err = c.CreateShardGroup("db1", "autogen", time.Now().Add(15*24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	} else if sg == nil {
+		t.Fatalf("expected ShardGroup")
+	}
+
+	sg, err = c.CreateShardGroup("db1", "rp0", time.Now())
 	if err != nil {
 		t.Fatal(err)
 	} else if sg == nil {
@@ -982,7 +1076,8 @@ func TestMetaClient_PruneShardGroups(t *testing.T) {
 	expiration := time.Now().Add(-2 * 7 * 24 * time.Hour).Add(-1 * time.Hour)
 
 	data := c.Data()
-	data.Databases[0].RetentionPolicies[0].ShardGroups[0].DeletedAt = expiration
+	data.Databases[1].RetentionPolicies[0].ShardGroups[0].DeletedAt = expiration
+	data.Databases[1].RetentionPolicies[0].ShardGroups[1].DeletedAt = expiration
 
 	if err := c.SetData(&data); err != nil {
 		t.Fatal(err)
@@ -993,7 +1088,7 @@ func TestMetaClient_PruneShardGroups(t *testing.T) {
 	}
 
 	data = c.Data()
-	rp, err := data.RetentionPolicy("db0", "autogen")
+	rp, err := data.RetentionPolicy("db1", "autogen")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1001,7 +1096,7 @@ func TestMetaClient_PruneShardGroups(t *testing.T) {
 		t.Fatalf("failed to prune shard group. got: %d, exp: %d", got, exp)
 	}
 
-	rp, err = data.RetentionPolicy("db0", "rp0")
+	rp, err = data.RetentionPolicy("db1", "rp0")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1069,32 +1164,7 @@ func testTempDir(skip int) string {
 	return dir
 }
 
-func mustParseStatement(s string) influxql.Statement {
-	stmt, err := influxql.ParseStatement(s)
-	if err != nil {
-		panic(err)
-	}
-	return stmt
-}
-
-func mustMarshalJSON(v interface{}) string {
-	b, e := json.Marshal(v)
-	if e != nil {
-		panic(e)
-	}
-	return string(b)
-}
-
-func freePort() string {
-	l, _ := net.Listen("tcp", "127.0.0.1:0")
-	defer l.Close()
-	return l.Addr().String()
-}
-
-func freePorts(i int) []string {
-	var ports []string
-	for j := 0; j < i; j++ {
-		ports = append(ports, freePort())
-	}
-	return ports
+func isAdmin(u meta.User) bool {
+	ui := u.(*meta.UserInfo)
+	return ui.Admin
 }

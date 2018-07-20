@@ -1,33 +1,18 @@
 /*
  *
- * Copyright 2014, Google Inc.
- * All rights reserved.
+ * Copyright 2014 gRPC authors.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are
- * met:
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
  *
- *     * Redistributions of source code must retain the above copyright
- * notice, this list of conditions and the following disclaimer.
- *     * Redistributions in binary form must reproduce the above
- * copyright notice, this list of conditions and the following disclaimer
- * in the documentation and/or other materials provided with the
- * distribution.
- *     * Neither the name of Google Inc. nor the names of its
- * contributors may be used to endorse or promote products derived from
- * this software without specific prior written permission.
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
- * "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
- * LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
- * A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
- * OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
- * SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
- * LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
- * DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
- * THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
- * (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
  *
  */
 
@@ -35,6 +20,7 @@ package transport
 
 import (
 	"fmt"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -86,24 +72,25 @@ func TestTimeoutDecode(t *testing.T) {
 	}
 }
 
-func TestValidContentType(t *testing.T) {
+func TestContentSubtype(t *testing.T) {
 	tests := []struct {
-		h    string
-		want bool
+		contentType string
+		want        string
+		wantValid   bool
 	}{
-		{"application/grpc", true},
-		{"application/grpc+", true},
-		{"application/grpc+blah", true},
-		{"application/grpc;", true},
-		{"application/grpc;blah", true},
-		{"application/grpcd", false},
-		{"application/grpd", false},
-		{"application/grp", false},
+		{"application/grpc", "", true},
+		{"application/grpc+", "", true},
+		{"application/grpc+blah", "blah", true},
+		{"application/grpc;", "", true},
+		{"application/grpc;blah", "blah", true},
+		{"application/grpcd", "", false},
+		{"application/grpd", "", false},
+		{"application/grp", "", false},
 	}
 	for _, tt := range tests {
-		got := validContentType(tt.h)
-		if got != tt.want {
-			t.Errorf("validContentType(%q) = %v; want %v", tt.h, got, tt.want)
+		got, gotValid := contentSubtype(tt.contentType)
+		if got != tt.want || gotValid != tt.wantValid {
+			t.Errorf("contentSubtype(%q) = (%v, %v); want (%v, %v)", tt.contentType, got, gotValid, tt.want, tt.wantValid)
 		}
 	}
 }
@@ -115,12 +102,31 @@ func TestEncodeGrpcMessage(t *testing.T) {
 	}{
 		{"", ""},
 		{"Hello", "Hello"},
-		{"my favorite character is \u0000", "my favorite character is %00"},
-		{"my favorite character is %", "my favorite character is %25"},
+		{"\u0000", "%00"},
+		{"%", "%25"},
+		{"系统", "%E7%B3%BB%E7%BB%9F"},
+		{string([]byte{0xff, 0xfe, 0xfd}), "%EF%BF%BD%EF%BF%BD%EF%BF%BD"},
 	} {
 		actual := encodeGrpcMessage(tt.input)
 		if tt.expected != actual {
-			t.Errorf("encodeGrpcMessage(%v) = %v, want %v", tt.input, actual, tt.expected)
+			t.Errorf("encodeGrpcMessage(%q) = %q, want %q", tt.input, actual, tt.expected)
+		}
+	}
+
+	// make sure that all the visible ASCII chars except '%' are not percent encoded.
+	for i := ' '; i <= '~' && i != '%'; i++ {
+		output := encodeGrpcMessage(string(i))
+		if output != string(i) {
+			t.Errorf("encodeGrpcMessage(%v) = %v, want %v", string(i), output, string(i))
+		}
+	}
+
+	// make sure that all the invisible ASCII chars and '%' are percent encoded.
+	for i := rune(0); i == '%' || (i >= rune(0) && i < ' ') || (i > '~' && i <= rune(127)); i++ {
+		output := encodeGrpcMessage(string(i))
+		expected := fmt.Sprintf("%%%02X", i)
+		if output != expected {
+			t.Errorf("encodeGrpcMessage(%v) = %v, want %v", string(i), output, expected)
 		}
 	}
 }
@@ -136,10 +142,96 @@ func TestDecodeGrpcMessage(t *testing.T) {
 		{"H%6", "H%6"},
 		{"%G0", "%G0"},
 		{"%E7%B3%BB%E7%BB%9F", "系统"},
+		{"%EF%BF%BD", "�"},
 	} {
 		actual := decodeGrpcMessage(tt.input)
 		if tt.expected != actual {
-			t.Errorf("dncodeGrpcMessage(%v) = %v, want %v", tt.input, actual, tt.expected)
+			t.Errorf("decodeGrpcMessage(%q) = %q, want %q", tt.input, actual, tt.expected)
+		}
+	}
+
+	// make sure that all the visible ASCII chars except '%' are not percent decoded.
+	for i := ' '; i <= '~' && i != '%'; i++ {
+		output := decodeGrpcMessage(string(i))
+		if output != string(i) {
+			t.Errorf("decodeGrpcMessage(%v) = %v, want %v", string(i), output, string(i))
+		}
+	}
+
+	// make sure that all the invisible ASCII chars and '%' are percent decoded.
+	for i := rune(0); i == '%' || (i >= rune(0) && i < ' ') || (i > '~' && i <= rune(127)); i++ {
+		output := decodeGrpcMessage(fmt.Sprintf("%%%02X", i))
+		if output != string(i) {
+			t.Errorf("decodeGrpcMessage(%v) = %v, want %v", fmt.Sprintf("%%%02X", i), output, string(i))
+		}
+	}
+}
+
+// Decode an encoded string should get the same thing back, except for invalid
+// utf8 chars.
+func TestDecodeEncodeGrpcMessage(t *testing.T) {
+	testCases := []struct {
+		orig string
+		want string
+	}{
+		{"", ""},
+		{"hello", "hello"},
+		{"h%6", "h%6"},
+		{"%G0", "%G0"},
+		{"系统", "系统"},
+		{"Hello, 世界", "Hello, 世界"},
+
+		{string([]byte{0xff, 0xfe, 0xfd}), "���"},
+		{string([]byte{0xff}) + "Hello" + string([]byte{0xfe}) + "世界" + string([]byte{0xfd}), "�Hello�世界�"},
+	}
+	for _, tC := range testCases {
+		got := decodeGrpcMessage(encodeGrpcMessage(tC.orig))
+		if got != tC.want {
+			t.Errorf("decodeGrpcMessage(encodeGrpcMessage(%q)) = %q, want %q", tC.orig, got, tC.want)
+		}
+	}
+}
+
+const binaryValue = string(128)
+
+func TestEncodeMetadataHeader(t *testing.T) {
+	for _, test := range []struct {
+		// input
+		kin string
+		vin string
+		// output
+		vout string
+	}{
+		{"key", "abc", "abc"},
+		{"KEY", "abc", "abc"},
+		{"key-bin", "abc", "YWJj"},
+		{"key-bin", binaryValue, "woA"},
+	} {
+		v := encodeMetadataHeader(test.kin, test.vin)
+		if !reflect.DeepEqual(v, test.vout) {
+			t.Fatalf("encodeMetadataHeader(%q, %q) = %q, want %q", test.kin, test.vin, v, test.vout)
+		}
+	}
+}
+
+func TestDecodeMetadataHeader(t *testing.T) {
+	for _, test := range []struct {
+		// input
+		kin string
+		vin string
+		// output
+		vout string
+		err  error
+	}{
+		{"a", "abc", "abc", nil},
+		{"key-bin", "Zm9vAGJhcg==", "foo\x00bar", nil},
+		{"key-bin", "Zm9vAGJhcg", "foo\x00bar", nil},
+		{"key-bin", "woA=", binaryValue, nil},
+		{"a", "abc,efg", "abc,efg", nil},
+	} {
+		v, err := decodeMetadataHeader(test.kin, test.vin)
+		if !reflect.DeepEqual(v, test.vout) || !reflect.DeepEqual(err, test.err) {
+			t.Fatalf("decodeMetadataHeader(%q, %q) = %q, %v, want %q, %v", test.kin, test.vin, v, err, test.vout, test.err)
 		}
 	}
 }

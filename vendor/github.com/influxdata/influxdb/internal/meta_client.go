@@ -3,8 +3,8 @@ package internal
 import (
 	"time"
 
-	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxql"
 )
 
 // MetaClientMock is a mockable implementation of meta.MetaClient.
@@ -16,7 +16,7 @@ type MetaClientMock struct {
 	CreateRetentionPolicyFn             func(database string, spec *meta.RetentionPolicySpec, makeDefault bool) (*meta.RetentionPolicyInfo, error)
 	CreateShardGroupFn                  func(database, policy string, timestamp time.Time) (*meta.ShardGroupInfo, error)
 	CreateSubscriptionFn                func(database, rp, name, mode string, destinations []string) error
-	CreateUserFn                        func(name, password string, admin bool) (*meta.UserInfo, error)
+	CreateUserFn                        func(name, password string, admin bool) (meta.User, error)
 
 	DatabaseFn  func(name string) *meta.DatabaseInfo
 	DatabasesFn func() []meta.DatabaseInfo
@@ -32,18 +32,25 @@ type MetaClientMock struct {
 
 	OpenFn func() error
 
+	PrecreateShardGroupsFn func(from, to time.Time) error
+	PruneShardGroupsFn     func() error
+
 	RetentionPolicyFn func(database, name string) (rpi *meta.RetentionPolicyInfo, err error)
 
-	SetAdminPrivilegeFn     func(username string, admin bool) error
-	SetDataFn               func(*meta.Data) error
-	SetPrivilegeFn          func(username, database string, p influxql.Privilege) error
-	ShardsByTimeRangeFn     func(sources influxql.Sources, tmin, tmax time.Time) (a []meta.ShardInfo, err error)
-	ShardOwnerFn            func(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo)
-	UpdateRetentionPolicyFn func(database, name string, rpu *meta.RetentionPolicyUpdate, makeDefault bool) error
-	UpdateUserFn            func(name, password string) error
-	UserPrivilegeFn         func(username, database string) (*influxql.Privilege, error)
-	UserPrivilegesFn        func(username string) (map[string]influxql.Privilege, error)
-	UsersFn                 func() []meta.UserInfo
+	AuthenticateFn           func(username, password string) (ui meta.User, err error)
+	AdminUserExistsFn        func() bool
+	SetAdminPrivilegeFn      func(username string, admin bool) error
+	SetDataFn                func(*meta.Data) error
+	SetPrivilegeFn           func(username, database string, p influxql.Privilege) error
+	ShardGroupsByTimeRangeFn func(database, policy string, min, max time.Time) (a []meta.ShardGroupInfo, err error)
+	ShardOwnerFn             func(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo)
+	TruncateShardGroupsFn    func(t time.Time) error
+	UpdateRetentionPolicyFn  func(database, name string, rpu *meta.RetentionPolicyUpdate, makeDefault bool) error
+	UpdateUserFn             func(name, password string) error
+	UserPrivilegeFn          func(username, database string) (*influxql.Privilege, error)
+	UserPrivilegesFn         func(username string) (map[string]influxql.Privilege, error)
+	UserFn                   func(username string) (meta.User, error)
+	UsersFn                  func() []meta.UserInfo
 }
 
 func (c *MetaClientMock) Close() error {
@@ -74,7 +81,7 @@ func (c *MetaClientMock) CreateSubscription(database, rp, name, mode string, des
 	return c.CreateSubscriptionFn(database, rp, name, mode, destinations)
 }
 
-func (c *MetaClientMock) CreateUser(name, password string, admin bool) (*meta.UserInfo, error) {
+func (c *MetaClientMock) CreateUser(name, password string, admin bool) (meta.User, error) {
 	return c.CreateUserFn(name, password, admin)
 }
 
@@ -87,7 +94,7 @@ func (c *MetaClientMock) Databases() []meta.DatabaseInfo {
 }
 
 func (c *MetaClientMock) DeleteShardGroup(database string, policy string, id uint64) error {
-	return c.DeleteShardGroup(database, policy, id)
+	return c.DeleteShardGroupFn(database, policy, id)
 }
 
 func (c *MetaClientMock) DropContinuousQuery(database, name string) error {
@@ -126,12 +133,16 @@ func (c *MetaClientMock) SetPrivilege(username, database string, p influxql.Priv
 	return c.SetPrivilegeFn(username, database, p)
 }
 
-func (c *MetaClientMock) ShardsByTimeRange(sources influxql.Sources, tmin, tmax time.Time) (a []meta.ShardInfo, err error) {
-	return c.ShardsByTimeRangeFn(sources, tmin, tmax)
+func (c *MetaClientMock) ShardGroupsByTimeRange(database, policy string, min, max time.Time) (a []meta.ShardGroupInfo, err error) {
+	return c.ShardGroupsByTimeRangeFn(database, policy, min, max)
 }
 
 func (c *MetaClientMock) ShardOwner(shardID uint64) (database, policy string, sgi *meta.ShardGroupInfo) {
 	return c.ShardOwnerFn(shardID)
+}
+
+func (c *MetaClientMock) TruncateShardGroups(t time.Time) error {
+	return c.TruncateShardGroupsFn(t)
 }
 
 func (c *MetaClientMock) UpdateRetentionPolicy(database, name string, rpu *meta.RetentionPolicyUpdate, makeDefault bool) error {
@@ -150,8 +161,19 @@ func (c *MetaClientMock) UserPrivileges(username string) (map[string]influxql.Pr
 	return c.UserPrivilegesFn(username)
 }
 
-func (c *MetaClientMock) Users() []meta.UserInfo { return c.UsersFn() }
+func (c *MetaClientMock) Authenticate(username, password string) (meta.User, error) {
+	return c.AuthenticateFn(username, password)
+}
+func (c *MetaClientMock) AdminUserExists() bool { return c.AdminUserExistsFn() }
+
+func (c *MetaClientMock) User(username string) (meta.User, error) { return c.UserFn(username) }
+func (c *MetaClientMock) Users() []meta.UserInfo                  { return c.UsersFn() }
 
 func (c *MetaClientMock) Open() error                { return c.OpenFn() }
 func (c *MetaClientMock) Data() meta.Data            { return c.DataFn() }
 func (c *MetaClientMock) SetData(d *meta.Data) error { return c.SetDataFn(d) }
+
+func (c *MetaClientMock) PrecreateShardGroups(from, to time.Time) error {
+	return c.PrecreateShardGroupsFn(from, to)
+}
+func (c *MetaClientMock) PruneShardGroups() error { return c.PruneShardGroupsFn() }

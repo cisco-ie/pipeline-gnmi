@@ -1,10 +1,9 @@
-SCALA_VERSION?= 2.11
-KAFKA_VERSION?= 0.10.1.0
+SCALA_VERSION?= 2.12
+KAFKA_VERSION?= 1.0.0
 KAFKA_DIR= kafka_$(SCALA_VERSION)-$(KAFKA_VERSION)
-KAFKA_SRC= http://www.mirrorservice.org/sites/ftp.apache.org/kafka/$(KAFKA_VERSION)/$(KAFKA_DIR).tgz
+KAFKA_SRC= https://archive.apache.org/dist/kafka/$(KAFKA_VERSION)/$(KAFKA_DIR).tgz
 KAFKA_ROOT= testdata/$(KAFKA_DIR)
-
-PKG:=$(shell glide nv)
+PKG=$(shell go list ./... | grep -v vendor)
 
 default: vet test
 
@@ -22,10 +21,15 @@ test-race: testdeps
 
 testdeps: $(KAFKA_ROOT)
 
-.PHONY: test testdeps vet
+doc: README.md
+
+.PHONY: test testdeps vet doc
 
 # ---------------------------------------------------------------------
 
 $(KAFKA_ROOT):
 	@mkdir -p $(dir $@)
 	cd $(dir $@) && curl -sSL $(KAFKA_SRC) | tar xz
+
+README.md: README.md.tpl $(wildcard *.go)
+	becca -package $(subst $(GOPATH)/src/,,$(PWD))

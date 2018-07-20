@@ -1,3 +1,4 @@
+// Package dumptsm inspects low-level details about tsm1 files.
 package dumptsm
 
 import (
@@ -109,16 +110,13 @@ func (cmd *Command) dump() error {
 		var pos int
 		for i := 0; i < keyCount; i++ {
 			key, _ := r.KeyAt(i)
-			for _, e := range r.Entries(string(key)) {
+			for _, e := range r.Entries(key) {
 				pos++
 				split := strings.Split(string(key), "#!~#")
 
-				// We dont' know know if we have fields so use an informative default
-				var measurement, field string = "UNKNOWN", "UNKNOWN"
-
 				// Possible corruption? Try to read as much as we can and point to the problem.
-				measurement = split[0]
-				field = split[1]
+				measurement := split[0]
+				field := split[1]
 
 				if cmd.filterKey != "" && !strings.Contains(string(key), cmd.filterKey) {
 					continue
@@ -148,7 +146,7 @@ func (cmd *Command) dump() error {
 	// Start at the beginning and read every block
 	for j := 0; j < keyCount; j++ {
 		key, _ := r.KeyAt(j)
-		for _, e := range r.Entries(string(key)) {
+		for _, e := range r.Entries(key) {
 
 			f.Seek(int64(e.Offset), 0)
 			f.Read(b[:4])
@@ -284,10 +282,10 @@ Usage: influx_inspect dumptsm [flags] <path
 
 var (
 	fieldType = []string{
-		"timestamp", "float", "int", "bool", "string",
+		"timestamp", "float", "int", "bool", "string", "unsigned",
 	}
 	blockTypes = []string{
-		"float64", "int64", "bool", "string",
+		"float64", "int64", "bool", "string", "unsigned",
 	}
 	timeEnc = []string{
 		"none", "s8b", "rle",
@@ -304,8 +302,11 @@ var (
 	stringEnc = []string{
 		"none", "snpy",
 	}
+	unsignedEnc = []string{
+		"none", "s8b", "rle",
+	}
 	encDescs = [][]string{
-		timeEnc, floatEnc, intEnc, boolEnc, stringEnc,
+		timeEnc, floatEnc, intEnc, boolEnc, stringEnc, unsignedEnc,
 	}
 )
 

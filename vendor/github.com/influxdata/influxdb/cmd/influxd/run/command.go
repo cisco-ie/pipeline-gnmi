@@ -1,3 +1,4 @@
+// Package run is the run (default) subcommand for the influxd command.
 package run
 
 import (
@@ -6,12 +7,15 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"time"
 
+	"github.com/influxdata/influxdb/logger"
 	"go.uber.org/zap"
 )
 
@@ -35,14 +39,18 @@ type Command struct {
 	BuildTime string
 
 	closing chan struct{}
+	pidfile string
 	Closed  chan struct{}
 
 	Stdin  io.Reader
 	Stdout io.Writer
 	Stderr io.Writer
-	Logger zap.Logger
+	Logger *zap.Logger
 
 	Server *Server
+
+	// How to get environment variables. Normally set to os.Getenv, except for tests.
+	Getenv func(string) string
 }
 
 // NewCommand return a new instance of Command.
@@ -53,7 +61,7 @@ func NewCommand() *Command {
 		Stdin:   os.Stdin,
 		Stdout:  os.Stdout,
 		Stderr:  os.Stderr,
-		Logger:  zap.New(zap.NullEncoder()),
+		Logger:  zap.NewNop(),
 	}
 }
 
@@ -65,27 +73,13 @@ func (cmd *Command) Run(args ...string) error {
 		return err
 	}
 
-	// Print sweet InfluxDB logo.
-	fmt.Print(logo)
-
-	// Mark start-up in log.
-	cmd.Logger.Info(fmt.Sprintf("InfluxDB starting, version %s, branch %s, commit %s",
-		cmd.Version, cmd.Branch, cmd.Commit))
-	cmd.Logger.Info(fmt.Sprintf("Go version %s, GOMAXPROCS set to %d", runtime.Version(), runtime.GOMAXPROCS(0)))
-
-	// Write the PID file.
-	if err := cmd.writePIDFile(options.PIDFile); err != nil {
-		return fmt.Errorf("write pid file: %s", err)
-	}
-
-	// Parse config
 	config, err := cmd.ParseConfig(options.GetConfigPath())
 	if err != nil {
 		return fmt.Errorf("parse config: %s", err)
 	}
 
 	// Apply any environment variables on top of the parsed config
-	if err := config.ApplyEnvOverrides(); err != nil {
+	if err := config.ApplyEnvOverrides(cmd.Getenv); err != nil {
 		return fmt.Errorf("apply env config: %v", err)
 	}
 
@@ -94,9 +88,48 @@ func (cmd *Command) Run(args ...string) error {
 		return fmt.Errorf("%s. To generate a valid configuration file run `influxd config > influxdb.generated.conf`", err)
 	}
 
-	if config.HTTPD.PprofEnabled {
-		// Turn on block profiling to debug stuck databases
+	var logErr error
+	if cmd.Logger, logErr = config.Logging.New(cmd.Stderr); logErr != nil {
+		// assign the default logger
+		cmd.Logger = logger.New(cmd.Stderr)
+	}
+
+	// Attempt to run pprof on :6060 before startup if debug pprof enabled.
+	if config.HTTPD.DebugPprofEnabled {
 		runtime.SetBlockProfileRate(int(1 * time.Second))
+		runtime.SetMutexProfileFraction(1)
+		go func() { http.ListenAndServe("localhost:6060", nil) }()
+	}
+
+	// Print sweet InfluxDB logo.
+	if !config.Logging.SuppressLogo && logger.IsTerminal(cmd.Stdout) {
+		fmt.Fprint(cmd.Stdout, logo)
+	}
+
+	// Mark start-up in log.
+	cmd.Logger.Info("InfluxDB starting",
+		zap.String("version", cmd.Version),
+		zap.String("branch", cmd.Branch),
+		zap.String("commit", cmd.Commit))
+	cmd.Logger.Info("Go runtime",
+		zap.String("version", runtime.Version()),
+		zap.Int("maxprocs", runtime.GOMAXPROCS(0)))
+
+	// If there was an error on startup when creating the logger, output it now.
+	if logErr != nil {
+		cmd.Logger.Error("Unable to configure logger", zap.Error(logErr))
+	}
+
+	// Write the PID file.
+	if err := cmd.writePIDFile(options.PIDFile); err != nil {
+		return fmt.Errorf("write pid file: %s", err)
+	}
+	cmd.pidfile = options.PIDFile
+
+	if config.HTTPD.PprofEnabled {
+		// Turn on block and mutex profiling.
+		runtime.SetBlockProfileRate(int(1 * time.Second))
+		runtime.SetMutexProfileFraction(1) // Collect every sample
 	}
 
 	// Create server from config and start it.
@@ -127,6 +160,7 @@ func (cmd *Command) Run(args ...string) error {
 // Close shuts down the server.
 func (cmd *Command) Close() error {
 	defer close(cmd.Closed)
+	defer cmd.removePIDFile()
 	close(cmd.closing)
 	if cmd.Server != nil {
 		return cmd.Server.Close()
@@ -142,6 +176,14 @@ func (cmd *Command) monitorServerErrors() {
 			logger.Println(err)
 		case <-cmd.closing:
 			return
+		}
+	}
+}
+
+func (cmd *Command) removePIDFile() {
+	if cmd.pidfile != "" {
+		if err := os.Remove(cmd.pidfile); err != nil {
+			cmd.Logger.Error("Unable to remove pidfile", zap.Error(err))
 		}
 	}
 }
@@ -171,8 +213,7 @@ func (cmd *Command) writePIDFile(path string) error {
 	}
 
 	// Ensure the required directory structure exists.
-	err := os.MkdirAll(filepath.Dir(path), 0777)
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0777); err != nil {
 		return fmt.Errorf("mkdir: %s", err)
 	}
 
@@ -186,15 +227,15 @@ func (cmd *Command) writePIDFile(path string) error {
 }
 
 // ParseConfig parses the config at path.
-// Returns a demo configuration if path is blank.
+// It returns a demo configuration if path is blank.
 func (cmd *Command) ParseConfig(path string) (*Config, error) {
 	// Use demo configuration if no config path is specified.
 	if path == "" {
-		cmd.Logger.Info("no configuration provided, using default settings")
+		cmd.Logger.Info("No configuration provided, using default settings")
 		return NewDemoConfig()
 	}
 
-	cmd.Logger.Info(fmt.Sprintf("Using configuration at: %s\n", path))
+	cmd.Logger.Info("Loading configuration file", zap.String("path", path))
 
 	config := NewConfig()
 	if err := config.FromTomlFile(path); err != nil {
@@ -204,7 +245,7 @@ func (cmd *Command) ParseConfig(path string) (*Config, error) {
 	return config, nil
 }
 
-var usage = `Runs the InfluxDB server.
+const usage = `Runs the InfluxDB server.
 
 Usage: influxd run [flags]
 

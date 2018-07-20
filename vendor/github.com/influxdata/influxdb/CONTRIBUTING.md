@@ -15,24 +15,24 @@ If you have never written a bug report before, or if you want to brush up on you
 Test cases should be in the form of `curl` commands. For example:
 ```bash
 # create database
-curl -G http://localhost:8086/query --data-urlencode "q=CREATE DATABASE mydb"
+curl -X POST http://localhost:8086/query --data-urlencode "q=CREATE DATABASE mydb"
 
 # create retention policy
-curl -G http://localhost:8086/query --data-urlencode "q=CREATE RETENTION POLICY myrp ON mydb DURATION 365d REPLICATION 1 DEFAULT"
+curl -X POST http://localhost:8086/query --data-urlencode "q=CREATE RETENTION POLICY myrp ON mydb DURATION 365d REPLICATION 1 DEFAULT"
 
 # write data
-curl -X POST http://localhost:8086/write --data-urlencode "db=mydb" --data-binary "cpu,region=useast,host=server_1,service=redis value=61"
+curl -X POST http://localhost:8086/write?db=mydb --data-binary "cpu,region=useast,host=server_1,service=redis value=61"
 
 # Delete a Measurement
-curl -G http://localhost:8086/query  --data-urlencode 'db=mydb' --data-urlencode 'q=DROP MEASUREMENT cpu'
+curl -X POST http://localhost:8086/query  --data-urlencode 'db=mydb' --data-urlencode 'q=DROP MEASUREMENT cpu'
 
 # Query the Measurement
 # Bug: expected it to return no data, but data comes back.
-curl -G http://localhost:8086/query  --data-urlencode 'db=mydb' --data-urlencode 'q=SELECT * from cpu'
+curl -X POST http://localhost:8086/query  --data-urlencode 'db=mydb' --data-urlencode 'q=SELECT * from cpu'
 ```
 **If you don't include a clear test case like this, your issue may not be investigated, and may even be closed**. If writing the data is too difficult, please zip up your data directory and include a link to it in your bug report.
 
-Please note that issues are *not the place to file general questions* such as "how do I use collectd with InfluxDB?" Questions of this nature should be sent to the [Google Group](https://groups.google.com/forum/#!forum/influxdb), not filed as issues. Issues like this will be closed.
+Please note that issues are *not the place to file general questions* such as "how do I use collectd with InfluxDB?" Questions of this nature should be sent to the [InfluxData Community](https://community.influxdata.com/), not filed as issues. Issues like this will be closed.
 
 Feature requests
 ---------------
@@ -69,7 +69,7 @@ second to sign our CLA, which can be found
 
 Installing Go
 -------------
-InfluxDB requires Go 1.7.4.
+InfluxDB requires Go 1.10.3.
 
 At InfluxDB we find gvm, a Go version manager, useful for installing Go. For instructions
 on how to install it see [the gvm page on github](https://github.com/moovweb/gvm).
@@ -77,14 +77,14 @@ on how to install it see [the gvm page on github](https://github.com/moovweb/gvm
 After installing gvm you can install and set the default go version by
 running the following:
 
-    gvm install go1.7.4
-    gvm use go1.7.4 --default
+    gvm install go1.10.3
+    gvm use go1.10.3 --default
 
-Installing GDM
+Installing Dep
 -------------
-InfluxDB uses [gdm](https://github.com/sparrc/gdm) to manage dependencies.  Install it by running the following:
+InfluxDB uses [dep](https://github.com/golang/dep) to manage dependencies.  Install it by running the following:
 
-    go get github.com/sparrc/gdm
+    go get github.com/golang/dep/cmd/dep
 
 Revision Control Systems
 -------------
@@ -126,7 +126,7 @@ Make sure you have Go installed and the project structure as shown above. To the
 
 ```bash
 cd $GOPATH/src/github.com/influxdata/influxdb
-gdm restore
+dep ensure
 ```
 
 To then build and install the binaries, run the following command.
@@ -194,14 +194,14 @@ go generate ./...
 **Troubleshooting**
 
 If generating the protobuf code is failing for you, check each of the following:
-* Ensure the protobuf library can be found. Make sure that `LD_LIBRRARY_PATH` includes the directory in which the library `libprotoc.so` has been installed.
+* Ensure the protobuf library can be found. Make sure that `LD_LIBRARY_PATH` includes the directory in which the library `libprotoc.so` has been installed.
 * Ensure the command `protoc-gen-gogo`, found in `GOPATH/bin`, is on your path. This can be done by adding `GOPATH/bin` to `PATH`.
 
 
 Generated Go Templates
 ----------------------
 
-The query engine requires optimizes data structures for each data type so
+The query engine requires optimized data structures for each data type so
 instead of writing each implementation several times we use templates. _Do not
 change code that ends in a `.gen.go` extension!_ Instead you must edit the
 `.gen.go.tmpl` file that was used to generate it.
@@ -277,4 +277,6 @@ func BenchmarkSomething(b *testing.B) {
 
 Continuous Integration testing
 -----
-InfluxDB uses CircleCI for continuous integration testing. To see how the code is built and tested, check out [this file](https://github.com/influxdata/influxdb/blob/master/circle-test.sh). It closely follows the build and test process outlined above. You can see the exact version of Go InfluxDB uses for testing by consulting that file.
+InfluxDB uses CircleCI for continuous integration testing. CircleCI executes [test.sh](https://github.com/influxdata/influxdb/blob/master/test.sh), so you may do the same on your local development environment before creating a pull request.
+
+The `test.sh` script executes a test suite with 5 variants (standard 64 bit, 64 bit with race detection, 32 bit, TSI, go version 1.10.3), each executes with a different arg, 0 through 4. Unless you know differently, `./test.sh 0` is probably all you need.

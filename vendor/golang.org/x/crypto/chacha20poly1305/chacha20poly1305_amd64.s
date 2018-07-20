@@ -278,7 +278,7 @@ TEXT ·chacha20Poly1305Open(SB), 0, $288-97
 	MOVQ ad+72(FP), adp
 
 	// Check for AVX2 support
-	CMPB runtime·support_avx2(SB), $1
+	CMPB ·useAVX2(SB), $1
 	JE   chacha20Poly1305Open_AVX2
 
 	// Special optimization, for very short buffers
@@ -1484,8 +1484,7 @@ TEXT ·chacha20Poly1305Seal(SB), 0, $288-96
 	MOVQ src_len+56(FP), inl
 	MOVQ ad+72(FP), adp
 
-	// Check for AVX2 support
-	CMPB runtime·support_avx2(SB), $1
+	CMPB ·useAVX2(SB), $1
 	JE   chacha20Poly1305Seal_AVX2
 
 	// Special optimization, for very short buffers
@@ -2694,14 +2693,3 @@ sealAVX2Tail512LoopB:
 	VPERM2I128 $0x13, tmpStoreAVX2, DD3, DD0
 
 	JMP sealAVX2SealHash
-
-// func haveSSSE3() bool
-TEXT ·haveSSSE3(SB), NOSPLIT, $0
-	XORQ AX, AX
-	INCL AX
-	CPUID
-	SHRQ $9, CX
-	ANDQ $1, CX
-	MOVB CX, ret+0(FP)
-	RET
-

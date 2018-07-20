@@ -1,3 +1,4 @@
+// Package help contains the help for the influx_inspect command.
 package help
 
 import (
@@ -30,11 +31,15 @@ Usage: influx_inspect [[command] [arguments]]
 
 The commands are:
 
-    dumptsm              dumps low-level details about tsm1 files.
+    deletetsm            bulk measurement deletion of raw tsm file
+    dumptsi              dumps low-level details about tsi1 files
+    dumptsm              dumps low-level details about tsm1 files
     export               exports raw data from a shard to line protocol
+    buildtsi             generates tsi1 indexes from tsm1 data
     help                 display this help message
     report               displays a shard level report
     verify               verifies integrity of TSM files
+    verify-seriesfile    verifies integrity of the Series file
 
 "help" is the default command.
 

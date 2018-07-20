@@ -50,7 +50,14 @@ func testVersionDecodable(t *testing.T, name string, out versionedDecoder, in []
 }
 
 func testRequest(t *testing.T, name string, rb protocolBody, expected []byte) {
-	// Encoder request
+	if !rb.requiredVersion().IsAtLeast(MinVersion) {
+		t.Errorf("Request %s has invalid required version", name)
+	}
+	packet := testRequestEncode(t, name, rb, expected)
+	testRequestDecode(t, name, rb, packet)
+}
+
+func testRequestEncode(t *testing.T, name string, rb protocolBody, expected []byte) []byte {
 	req := &request{correlationID: 123, clientID: "foo", body: rb}
 	packet, err := encode(req, nil)
 	headerSize := 14 + len("foo")
@@ -59,7 +66,10 @@ func testRequest(t *testing.T, name string, rb protocolBody, expected []byte) {
 	} else if !bytes.Equal(packet[headerSize:], expected) {
 		t.Error("Encoding", name, "failed\ngot ", packet[headerSize:], "\nwant", expected)
 	}
-	// Decoder request
+	return packet
+}
+
+func testRequestDecode(t *testing.T, name string, rb protocolBody, packet []byte) {
 	decoded, n, err := decodeRequest(bytes.NewReader(packet))
 	if err != nil {
 		t.Error("Failed to decode request", err)
@@ -69,6 +79,8 @@ func testRequest(t *testing.T, name string, rb protocolBody, expected []byte) {
 		t.Error(spew.Sprintf("Decoded request %q does not match the encoded one\nencoded: %+v\ndecoded: %+v", name, rb, decoded.body))
 	} else if n != len(packet) {
 		t.Errorf("Decoded request %q bytes: %d does not match the encoded one: %d\n", name, n, len(packet))
+	} else if rb.version() != decoded.body.version() {
+		t.Errorf("Decoded request %q version: %d does not match the encoded one: %d\n", name, decoded.body.version(), rb.version())
 	}
 }
 
@@ -89,3 +101,5 @@ func testResponse(t *testing.T, name string, res protocolBody, expected []byte) 
 		t.Errorf("Decoded response does not match the encoded one\nencoded: %#v\ndecoded: %#v", res, decoded)
 	}
 }
+
+func nullString(s string) *string { return &s }

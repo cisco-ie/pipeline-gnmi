@@ -1,3 +1,5 @@
+// Command influx_tsm converts b1 or bz1 shards (from InfluxDB releases earlier than v0.11)
+// to the current tsm1 format.
 package main
 
 import (
@@ -261,6 +263,10 @@ func collectShards(dbs []os.FileInfo) tsdb.ShardInfos {
 // backupDatabase backs up the database named db
 func backupDatabase(db string) error {
 	copyFile := func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+
 		// Strip the DataPath from the path and replace with BackupPath.
 		toPath := strings.Replace(path, opts.DataPath, opts.BackupPath, 1)
 
@@ -300,7 +306,7 @@ func backupDatabase(db string) error {
 			if err := out.Truncate(0); err != nil {
 				return err
 			}
-			if _, err := out.Seek(0, os.SEEK_SET); err != nil {
+			if _, err := out.Seek(0, io.SeekStart); err != nil {
 				return err
 			}
 		}
@@ -309,11 +315,11 @@ func backupDatabase(db string) error {
 			log.Printf("Resuming backup of file %v, starting at %v bytes", path, dstInfo.Size())
 		}
 
-		off, err := out.Seek(0, os.SEEK_END)
+		off, err := out.Seek(0, io.SeekEnd)
 		if err != nil {
 			return err
 		}
-		if _, err := in.Seek(off, os.SEEK_SET); err != nil {
+		if _, err := in.Seek(off, io.SeekStart); err != nil {
 			return err
 		}
 

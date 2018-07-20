@@ -1,12 +1,12 @@
 hash: 9e2d657be9c18d210df04a568b9280a1b7c558c2ac7c654f996467017d3fdcd5
-updated: 2017-03-31T02:34:39.881575571+01:00
+updated: 2018-07-20T10:59:25.7281691+02:00
 imports:
 - name: github.com/beorn7/perks
   version: 4c0e84591b9aa9e6dcfdf3e020114cd81f89d5f9
   subpackages:
   - quantile
 - name: github.com/cisco/bigmuddy-network-telemetry-proto
-  version: 01b5f4349499a554c5ce28d904a5cf1e12b0f2a0
+  version: 4419cd20fb73f05d059a37fa3e41fe55f02a528f
   subpackages:
   - proto_go
   - proto_go/cisco_ios_xr_cdp_oper/cdp/nodes/node/interfaces/interface
@@ -590,84 +590,91 @@ imports:
   - proto_go/mdt_grpc_dialout
   - proto_go/old/telemetry
 - name: github.com/davecgh/go-spew
-  version: 346938d642f2ec3594ed81d874461961cd0faa76
+  version: 8991bc29aa16c548c550c7ff78260e27b9ab7c73
   subpackages:
   - spew
 - name: github.com/dlintw/goconf
   version: dcc070983490608a14480e3bf943bad464785df5
 - name: github.com/eapache/go-resiliency
-  version: b86b1ec0dd4209a588dc1285cdd471e73525c0b3
+  version: ea41b0fad31007accc7f806884dcdf3da98b79ce
   subpackages:
   - breaker
 - name: github.com/eapache/go-xerial-snappy
-  version: bb955e01b9346ac19dc29eb16586c90ded99a98c
+  version: 040cc1a32f578808623071247fdbd5cc43f37f5f
 - name: github.com/eapache/queue
-  version: 44cc805cf13205b55f69e14bcb69867d1ae92f98
+  version: 093482f3f8ce946c05bcba64badd2c82369e084d
 - name: github.com/evalphobia/logrus_fluent
-  version: 92541fcfe55451eaf2811be04d38e001475c294f
+  version: f27fe732e48aaf8dd7356a1bf0288790814469f7
 - name: github.com/fluent/fluent-logger-golang
-  version: 28bdb662295c1b7aca09c1a4edbf9430010775a9
+  version: 90f0f02707011b560ad1982ded9e6ead151198d4
   subpackages:
   - fluent
 - name: github.com/golang/protobuf
-  version: 8ee79997227bf9b34611aee7946ae64735e6fd93
+  version: b4deda0973fb4c70b50d226b1af49f3da59f5265
   subpackages:
   - jsonpb
   - proto
+  - ptypes
+  - ptypes/any
+  - ptypes/duration
+  - ptypes/struct
+  - ptypes/timestamp
 - name: github.com/golang/snappy
   version: d9eb7a3d35ec988b8585d4a0068e462c27d28380
 - name: github.com/influxdata/influxdb
-  version: 759d78feb1727cc9cfabfc61263b9808b1117d83
+  version: 468497c11f2583a9c702758da263dc238c430722
   subpackages:
   - client/v2
   - models
   - pkg/escape
-- name: github.com/klauspost/crc32
-  version: cb6bfca970f6908083f26f39a79009d608efd5cd
 - name: github.com/matttproud/golang_protobuf_extensions
-  version: c12348ce28de40eed0136aa2b644d0ee0650e56c
+  version: 3247c84500bff8d9fb6d579d800f20b3e091582c
   subpackages:
   - pbutil
 - name: github.com/philhofer/fwd
-  version: 98c11a7a6ec829d672b03833c3d69a7fae1ca972
+  version: bb6d471dc95d4fe11e432687f8b70ff496cf3136
 - name: github.com/pierrec/lz4
-  version: 5c9560bfa9ace2bf86080bf40d46b34ae44604df
-- name: github.com/pierrec/xxHash
-  version: 5a004441f897722c627870a981d02b29924215fa
+  version: 6b9367c9ff401dbc54fabce3fb8d972e799b702d
   subpackages:
-  - xxHash32
+  - internal/xxh32
 - name: github.com/prometheus/client_golang
-  version: 575f371f7862609249a1be4c9145f429fe065e32
+  version: bcbbc08eb2ddff3af83bbf11e7ec13b4fd730b6e
   subpackages:
   - prometheus
 - name: github.com/prometheus/client_model
-  version: fa8ad6fec33561be4280a8f0514318c79d7f6cb6
+  version: 99fa1f4be8e564e8a6b613da7fa6f46c9edafc6c
   subpackages:
   - go
 - name: github.com/prometheus/common
-  version: 6d76b79f239843a04e8ad8dfd8fcadfa3920236f
+  version: e4aa40a9169a88835b849a6efb71e05dc04b88f0
   subpackages:
   - expfmt
   - internal/bitbucket.org/ww/goautoneg
   - model
 - name: github.com/prometheus/procfs
-  version: fcdb11ccb4389efb1b210b7ffb623ab71c5fdd60
+  version: 54d17b57dd7d4a3aa092476596b3f8a933bde349
+  subpackages:
+  - internal/util
+  - nfs
+  - xfs
 - name: github.com/rcrowley/go-metrics
-  version: 1f30fe9094a513ce4c700b9a54458bbb0c96996c
+  version: e2704e165165ec55d062f5919b4b29494e9fa790
 - name: github.com/Shopify/sarama
-  version: 0fb560e5f7fbcaee2f75e3c34174320709f69944
+  version: 22114655baec1a3d72fc99e95968c9e97b226b22
+- name: github.com/sirupsen/logrus
+  version: 92052687f8ec598ff0da626d2909478cfd1e3a3c
 - name: github.com/Sirupsen/logrus
-  version: 881bee4e20a5d11a6a88a5667c6f292072ac1963
+  version: 92052687f8ec598ff0da626d2909478cfd1e3a3c
 - name: github.com/tinylib/msgp
-  version: 38a6f61a768dc24552dad94611923841b53acc4f
+  version: b2b6a672cf1e5b90748f79b8b81fc8c5cf0571a1
   subpackages:
   - msgp
 - name: golang.org/x/crypto
-  version: f6b343c37ca80bfa8ea539da67a0b621f84fab1d
+  version: a2144134853fc9a27a7b1e3eb4f19f1a76df13c9
   subpackages:
   - ssh/terminal
 - name: golang.org/x/net
-  version: 45e771701b814666a7eb299e6c7a57d0b1799e91
+  version: 92b859f39abd2d91a854c9f9c4621b2f5054a92d
   subpackages:
   - context
   - http2
@@ -677,22 +684,52 @@ imports:
   - lex/httplex
   - trace
 - name: golang.org/x/sys
-  version: d75a52659825e75fff6158388dddc6a5b04f9ba5
+  version: d8e400bc7db4870d786864138af681469693d18c
   subpackages:
   - unix
-- name: google.golang.org/grpc
-  version: 708a7f9f3283aa2d4f6132d287d78683babe55c8
+  - windows
+- name: golang.org/x/text
+  version: f21a4dfb5e38f5895301dc265a8def02365cc3d0
   subpackages:
+  - secure/bidirule
+  - transform
+  - unicode/bidi
+  - unicode/norm
+- name: google.golang.org/genproto
+  version: ff3583edef7de132f219f0efc00e097cabcc0ec0
+  subpackages:
+  - googleapis/rpc/status
+- name: google.golang.org/grpc
+  version: 168a6198bcb0ef175f7dacec0b8691fc141dc9b8
+  subpackages:
+  - balancer
+  - balancer/base
+  - balancer/roundrobin
   - codes
+  - connectivity
   - credentials
+  - encoding
+  - encoding/proto
   - grpclog
   - internal
+  - internal/backoff
+  - internal/channelz
+  - internal/grpcrand
+  - keepalive
   - metadata
   - naming
   - peer
+  - resolver
+  - resolver/dns
+  - resolver/passthrough
   - stats
+  - status
   - tap
   - transport
 - name: gopkg.in/bsm/sarama-cluster.v2
-  version: 7f63f9e1f4c350d3b180261e3818e0b97e9ef6cc
-testImports: []
+  version: cf455bc755fe41ac9bb2861e7a961833d9c2ecc3
+testImports:
+- name: github.com/cisco/bigmuddy-network-telemetry-pipeline
+  version: a57e87c59ac220ad7725b6b74c3570243e1a4ac3
+  subpackages:
+  - mdt_msg_samples

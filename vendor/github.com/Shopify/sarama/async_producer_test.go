@@ -18,7 +18,7 @@ func closeProducer(t *testing.T, p AsyncProducer) {
 
 	wg.Add(2)
 	go func() {
-		for _ = range p.Successes() {
+		for range p.Successes() {
 			t.Error("Unexpected message on Successes()")
 		}
 		wg.Done()
@@ -131,9 +131,12 @@ func TestAsyncProducer(t *testing.T) {
 			if msg.Metadata.(int) != i {
 				t.Error("Message metadata did not match")
 			}
+		case <-time.After(time.Second):
+			t.Errorf("Timeout waiting for msg #%d", i)
+			goto done
 		}
 	}
-
+done:
 	closeProducer(t, producer)
 	leader.Close()
 	seedBroker.Close()
@@ -639,6 +642,7 @@ func TestAsyncProducerFlusherRetryCondition(t *testing.T) {
 
 	leader.SetHandlerByMap(map[string]MockResponse{
 		"ProduceRequest": NewMockProduceResponse(t).
+			SetVersion(0).
 			SetError("my_topic", 0, ErrNoError),
 	})
 
@@ -808,7 +812,7 @@ func ExampleAsyncProducer_goroutines() {
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		for _ = range producer.Successes() {
+		for range producer.Successes() {
 			successes++
 		}
 	}()

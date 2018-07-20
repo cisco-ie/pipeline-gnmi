@@ -12,30 +12,33 @@ import (
 	"github.com/golang/snappy"
 )
 
-const (
-	// stringUncompressed is a an uncompressed format encoding strings as raw bytes.
-	// Not yet implemented.
-	stringUncompressed = 0
+// Note: an uncompressed format is not yet implemented.
 
-	// stringCompressedSnappy is a compressed encoding using Snappy compression
-	stringCompressedSnappy = 1
-)
+// stringCompressedSnappy is a compressed encoding using Snappy compression
+const stringCompressedSnappy = 1
 
+// StringEncoder encodes multiple strings into a byte slice.
 type StringEncoder struct {
 	// The encoded bytes
 	bytes []byte
 }
 
+// NewStringEncoder returns a new StringEncoder with an initial buffer ready to hold sz bytes.
 func NewStringEncoder(sz int) StringEncoder {
 	return StringEncoder{
 		bytes: make([]byte, 0, sz),
 	}
 }
 
+// Flush is no-op
+func (e *StringEncoder) Flush() {}
+
+// Reset sets the encoder back to its initial state.
 func (e *StringEncoder) Reset() {
 	e.bytes = e.bytes[:0]
 }
 
+// Write encodes s to the underlying buffer.
 func (e *StringEncoder) Write(s string) {
 	b := make([]byte, 10)
 	// Append the length of the string using variable byte encoding
@@ -46,6 +49,7 @@ func (e *StringEncoder) Write(s string) {
 	e.bytes = append(e.bytes, s...)
 }
 
+// Bytes returns a copy of the underlying buffer.
 func (e *StringEncoder) Bytes() ([]byte, error) {
 	// Compress the currently appended bytes using snappy and prefix with
 	// a 1 byte header for future extension
@@ -53,6 +57,7 @@ func (e *StringEncoder) Bytes() ([]byte, error) {
 	return append([]byte{stringCompressedSnappy << 4}, data...), nil
 }
 
+// StringDecoder decodes a byte slice into strings.
 type StringDecoder struct {
 	b   []byte
 	l   int
@@ -82,6 +87,7 @@ func (e *StringDecoder) SetBytes(b []byte) error {
 	return nil
 }
 
+// Next returns true if there are any values remaining to be decoded.
 func (e *StringDecoder) Next() bool {
 	if e.err != nil {
 		return false
@@ -91,6 +97,7 @@ func (e *StringDecoder) Next() bool {
 	return e.i < len(e.b)
 }
 
+// Read returns the next value from the decoder.
 func (e *StringDecoder) Read() string {
 	// Read the length of the string
 	length, n := binary.Uvarint(e.b[e.i:])
@@ -116,6 +123,7 @@ func (e *StringDecoder) Read() string {
 	return string(e.b[lower:upper])
 }
 
+// Error returns the last error encountered by the decoder.
 func (e *StringDecoder) Error() error {
 	return e.err
 }

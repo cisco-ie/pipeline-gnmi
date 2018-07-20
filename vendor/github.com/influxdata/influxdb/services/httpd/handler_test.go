@@ -6,33 +6,44 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"regexp"
+	"os"
+	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/dgrijalva/jwt-go"
-	"github.com/influxdata/influxdb/influxql"
+	"github.com/gogo/protobuf/proto"
+	"github.com/golang/snappy"
+	"github.com/google/go-cmp/cmp"
+	"github.com/influxdata/influxdb/internal"
+	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxdb/prometheus/remote"
+	"github.com/influxdata/influxdb/query"
 	"github.com/influxdata/influxdb/services/httpd"
 	"github.com/influxdata/influxdb/services/meta"
+	"github.com/influxdata/influxdb/tsdb"
+	"github.com/influxdata/influxql"
 )
 
 // Ensure the handler returns results from a query (including nil results).
 func TestHandler_Query(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		if stmt.String() != `SELECT * FROM bar` {
 			t.Fatalf("unexpected query: %s", stmt.String())
 		} else if ctx.Database != `foo` {
 			t.Fatalf("unexpected db: %s", ctx.Database)
 		}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
-		ctx.Results <- &influxql.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
+		ctx.Results <- &query.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
 		return nil
 	}
 
@@ -48,14 +59,14 @@ func TestHandler_Query(t *testing.T) {
 // Ensure the handler returns results from a query passed as a file.
 func TestHandler_Query_File(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		if stmt.String() != `SELECT * FROM bar` {
 			t.Fatalf("unexpected query: %s", stmt.String())
 		} else if ctx.Database != `foo` {
 			t.Fatalf("unexpected db: %s", ctx.Database)
 		}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
-		ctx.Results <- &influxql.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
+		ctx.Results <- &query.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
 		return nil
 	}
 
@@ -89,18 +100,9 @@ func TestHandler_Query_Auth(t *testing.T) {
 	h := NewHandler(true)
 
 	// Set mock meta client functions for the handler to use.
-	h.MetaClient.UsersFn = func() []meta.UserInfo {
-		return []meta.UserInfo{
-			{
-				Name:       "user1",
-				Hash:       "abcd",
-				Admin:      true,
-				Privileges: make(map[string]influxql.Privilege),
-			},
-		}
-	}
+	h.MetaClient.AdminUserExistsFn = func() bool { return true }
 
-	h.MetaClient.UserFn = func(username string) (*meta.UserInfo, error) {
+	h.MetaClient.UserFn = func(username string) (meta.User, error) {
 		if username != "user1" {
 			return nil, meta.ErrUserNotFound
 		}
@@ -111,7 +113,7 @@ func TestHandler_Query_Auth(t *testing.T) {
 		}, nil
 	}
 
-	h.MetaClient.AuthenticateFn = func(u, p string) (*meta.UserInfo, error) {
+	h.MetaClient.AuthenticateFn = func(u, p string) (meta.User, error) {
 		if u != "user1" {
 			return nil, fmt.Errorf("unexpected user: exp: user1, got: %s", u)
 		} else if p != "abcd" {
@@ -121,25 +123,36 @@ func TestHandler_Query_Auth(t *testing.T) {
 	}
 
 	// Set mock query authorizer for handler to use.
-	h.QueryAuthorizer.AuthorizeQueryFn = func(u *meta.UserInfo, query *influxql.Query, database string) error {
+	h.QueryAuthorizer.AuthorizeQueryFn = func(u meta.User, query *influxql.Query, database string) error {
 		return nil
 	}
 
 	// Set mock statement executor for handler to use.
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		if stmt.String() != `SELECT * FROM bar` {
 			t.Fatalf("unexpected query: %s", stmt.String())
 		} else if ctx.Database != `foo` {
 			t.Fatalf("unexpected db: %s", ctx.Database)
 		}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
-		ctx.Results <- &influxql.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
+		ctx.Results <- &query.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
 		return nil
 	}
 
 	// Test the handler with valid user and password in the URL parameters.
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, MustNewJSONRequest("GET", "/query?u=user1&p=abcd&db=foo&q=SELECT+*+FROM+bar", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d: %s", w.Code, w.Body.String())
+	} else if body := strings.TrimSpace(w.Body.String()); body != `{"results":[{"statement_id":1,"series":[{"name":"series0"}]},{"statement_id":2,"series":[{"name":"series1"}]}]}` {
+		t.Fatalf("unexpected body: %s", body)
+	}
+
+	// Test the handler with valid user and password using basic auth.
+	w = httptest.NewRecorder()
+	r := MustNewJSONRequest("GET", "/query?db=foo&q=SELECT+*+FROM+bar", nil)
+	r.SetBasicAuth("user1", "abcd")
+	h.ServeHTTP(w, r)
 	if w.Code != http.StatusOK {
 		t.Fatalf("unexpected status: %d: %s", w.Code, w.Body.String())
 	} else if body := strings.TrimSpace(w.Body.String()); body != `{"results":[{"statement_id":1,"series":[{"name":"series0"}]},{"statement_id":2,"series":[{"name":"series1"}]}]}` {
@@ -213,12 +226,24 @@ func TestHandler_Query_Auth(t *testing.T) {
 	} else if body := strings.TrimSpace(w.Body.String()); body != `{"error":"token expiration required"}` {
 		t.Fatalf("unexpected body: %s", body)
 	}
+
+	// Test the handler with valid user and password in the url and invalid in
+	// basic auth (prioritize url).
+	w = httptest.NewRecorder()
+	r = MustNewJSONRequest("GET", "/query?u=user1&p=abcd&db=foo&q=SELECT+*+FROM+bar", nil)
+	r.SetBasicAuth("user1", "efgh")
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d: %s", w.Code, w.Body.String())
+	} else if body := strings.TrimSpace(w.Body.String()); body != `{"results":[{"statement_id":1,"series":[{"name":"series0"}]},{"statement_id":2,"series":[{"name":"series1"}]}]}` {
+		t.Fatalf("unexpected body: %s", body)
+	}
 }
 
 // Ensure the handler returns results from a query (including nil results).
 func TestHandler_QueryRegex(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		if stmt.String() != `SELECT * FROM test WHERE url =~ /http\:\/\/www.akamai\.com/` {
 			t.Fatalf("unexpected query: %s", stmt.String())
 		} else if ctx.Database != `test` {
@@ -235,9 +260,9 @@ func TestHandler_QueryRegex(t *testing.T) {
 // Ensure the handler merges results from the same statement.
 func TestHandler_Query_MergeResults(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series1"}})}
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series1"}})}
 		return nil
 	}
 
@@ -253,9 +278,9 @@ func TestHandler_Query_MergeResults(t *testing.T) {
 // Ensure the handler merges results from the same statement.
 func TestHandler_Query_MergeEmptyResults(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows{}}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series1"}})}
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows{}}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series1"}})}
 		return nil
 	}
 
@@ -271,12 +296,12 @@ func TestHandler_Query_MergeEmptyResults(t *testing.T) {
 // Ensure the handler can parse chunked and chunk size query parameters.
 func TestHandler_Query_Chunked(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		if ctx.ChunkSize != 2 {
 			t.Fatalf("unexpected chunk size: %d", ctx.ChunkSize)
 		}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series1"}})}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series1"}})}
 		return nil
 	}
 
@@ -295,14 +320,14 @@ func TestHandler_Query_Chunked(t *testing.T) {
 func TestHandler_Query_Async(t *testing.T) {
 	done := make(chan struct{})
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		if stmt.String() != `SELECT * FROM bar` {
 			t.Fatalf("unexpected query: %s", stmt.String())
 		} else if ctx.Database != `foo` {
 			t.Fatalf("unexpected db: %s", ctx.Database)
 		}
-		ctx.Results <- &influxql.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
-		ctx.Results <- &influxql.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
+		ctx.Results <- &query.Result{StatementID: 1, Series: models.Rows([]*models.Row{{Name: "series0"}})}
+		ctx.Results <- &query.Result{StatementID: 2, Series: models.Rows([]*models.Row{{Name: "series1"}})}
 		close(done)
 		return nil
 	}
@@ -353,11 +378,13 @@ func TestHandler_Query_ErrInvalidQuery(t *testing.T) {
 // Ensure the handler returns an appropriate 401 or 403 status when authentication or authorization fails.
 func TestHandler_Query_ErrAuthorize(t *testing.T) {
 	h := NewHandler(true)
-	h.QueryAuthorizer.AuthorizeQueryFn = func(u *meta.UserInfo, q *influxql.Query, db string) error {
+	h.QueryAuthorizer.AuthorizeQueryFn = func(u meta.User, q *influxql.Query, db string) error {
 		return errors.New("marker")
 	}
-	h.MetaClient.UsersFn = func() []meta.UserInfo {
-		return []meta.UserInfo{
+	h.MetaClient.AdminUserExistsFn = func() bool { return true }
+	h.MetaClient.AuthenticateFn = func(u, p string) (meta.User, error) {
+
+		users := []meta.UserInfo{
 			{
 				Name:  "admin",
 				Hash:  "admin",
@@ -371,9 +398,8 @@ func TestHandler_Query_ErrAuthorize(t *testing.T) {
 				},
 			},
 		}
-	}
-	h.MetaClient.AuthenticateFn = func(u, p string) (*meta.UserInfo, error) {
-		for _, user := range h.MetaClient.Users() {
+
+		for _, user := range users {
 			if u == user.Name {
 				if p == user.Hash {
 					return &user, nil
@@ -428,7 +454,7 @@ func TestHandler_Query_ErrAuthorize(t *testing.T) {
 // Ensure the handler returns a status 200 if an error is returned in the result.
 func TestHandler_Query_ErrResult(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		return errors.New("measurement not found")
 	}
 
@@ -449,9 +475,9 @@ func TestHandler_Query_CloseNotify(t *testing.T) {
 
 	interrupted := make(chan struct{})
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		select {
-		case <-ctx.InterruptCh:
+		case <-ctx.Done():
 		case <-done:
 		}
 		close(interrupted)
@@ -508,6 +534,272 @@ func TestHandler_Query_CloseNotify(t *testing.T) {
 	}
 }
 
+// Ensure the prometheus remote write works
+func TestHandler_PromWrite(t *testing.T) {
+	req := &remote.WriteRequest{
+		Timeseries: []*remote.TimeSeries{
+			{
+				Labels: []*remote.LabelPair{
+					{Name: "host", Value: "a"},
+					{Name: "region", Value: "west"},
+				},
+				Samples: []*remote.Sample{
+					{TimestampMs: 1, Value: 1.2},
+					{TimestampMs: 2, Value: math.NaN()},
+				},
+			},
+		},
+	}
+
+	data, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatal("couldn't marshal prometheus request")
+	}
+	compressed := snappy.Encode(nil, data)
+
+	b := bytes.NewReader(compressed)
+	h := NewHandler(false)
+	h.MetaClient.DatabaseFn = func(name string) *meta.DatabaseInfo {
+		return &meta.DatabaseInfo{}
+	}
+	called := false
+	h.PointsWriter.WritePointsFn = func(db, rp string, _ models.ConsistencyLevel, _ meta.User, points []models.Point) error {
+		called = true
+		point := points[0]
+		if point.UnixNano() != int64(time.Millisecond) {
+			t.Fatalf("Exp point time %d but got %d", int64(time.Millisecond), point.UnixNano())
+		}
+		tags := point.Tags()
+		expectedTags := models.Tags{models.Tag{Key: []byte("host"), Value: []byte("a")}, models.Tag{Key: []byte("region"), Value: []byte("west")}}
+		if !reflect.DeepEqual(tags, expectedTags) {
+			t.Fatalf("tags don't match\n\texp: %v\n\tgot: %v", expectedTags, tags)
+		}
+
+		fields, err := point.Fields()
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+		expFields := models.Fields{"value": 1.2}
+		if !reflect.DeepEqual(fields, expFields) {
+			t.Fatalf("fields don't match\n\texp: %v\n\tgot: %v", expFields, fields)
+		}
+		return nil
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewRequest("POST", "/api/v1/prom/write?db=foo", b))
+	if !called {
+		t.Fatal("WritePoints: expected call")
+	}
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: %d", w.Code)
+	}
+}
+
+// Ensure Prometheus remote read requests are converted to the correct InfluxQL query and
+// data is returned
+func TestHandler_PromRead(t *testing.T) {
+	req := &remote.ReadRequest{
+		Queries: []*remote.Query{{
+			Matchers: []*remote.LabelMatcher{
+				{
+					Type:  remote.MatchType_EQUAL,
+					Name:  "__name__",
+					Value: "value",
+				},
+			},
+			StartTimestampMs: 1,
+			EndTimestampMs:   2,
+		}},
+	}
+	data, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatal("couldn't marshal prometheus request")
+	}
+	compressed := snappy.Encode(nil, data)
+	b := bytes.NewReader(compressed)
+	h := NewHandler(false)
+	w := httptest.NewRecorder()
+
+	// Number of results in the result set
+	var i int64
+	h.Store.ResultSet.NextFn = func() bool {
+		i++
+		return i <= 2
+	}
+
+	// data for each cursor.
+	h.Store.ResultSet.CursorFn = func() tsdb.Cursor {
+		cursor := internal.NewFloatArrayCursorMock()
+
+		var i int64
+		cursor.NextFn = func() *tsdb.FloatArray {
+			i++
+			ts := []int64{22000000 * i, 10000000000 * i}
+			vs := []float64{2.3, 2992.33}
+			if i > 2 {
+				ts, vs = nil, nil
+			}
+			return &tsdb.FloatArray{Timestamps: ts, Values: vs}
+		}
+
+		return cursor
+	}
+
+	// Tags for each cursor.
+	h.Store.ResultSet.TagsFn = func() models.Tags {
+		return models.NewTags(map[string]string{
+			"host":         fmt.Sprintf("server-%d", i),
+			"_measurement": "mem",
+		})
+	}
+
+	h.ServeHTTP(w, MustNewRequest("POST", "/api/v1/prom/read?db=foo&rp=bar", b))
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", w.Code)
+	}
+
+	reqBuf, err := snappy.Decode(nil, w.Body.Bytes())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var resp remote.ReadResponse
+	if err := proto.Unmarshal(reqBuf, &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	expResults := []*remote.QueryResult{
+		{
+			Timeseries: []*remote.TimeSeries{
+				{
+					Labels: []*remote.LabelPair{
+						{Name: "host", Value: "server-1"},
+					},
+					Samples: []*remote.Sample{
+						{TimestampMs: 22, Value: 2.3},
+						{TimestampMs: 10000, Value: 2992.33},
+						{TimestampMs: 44, Value: 2.3},
+						{TimestampMs: 20000, Value: 2992.33},
+					},
+				},
+				{
+					Labels: []*remote.LabelPair{
+						{Name: "host", Value: "server-2"},
+					},
+					Samples: []*remote.Sample{
+						{TimestampMs: 22, Value: 2.3},
+						{TimestampMs: 10000, Value: 2992.33},
+						{TimestampMs: 44, Value: 2.3},
+						{TimestampMs: 20000, Value: 2992.33},
+					},
+				},
+			},
+		},
+	}
+
+	if !reflect.DeepEqual(resp.Results, expResults) {
+		t.Fatalf("Results differ:\n%v", cmp.Diff(resp.Results, expResults))
+	}
+}
+
+func TestHandler_PromRead_NoResults(t *testing.T) {
+	req := &remote.ReadRequest{Queries: []*remote.Query{&remote.Query{
+		Matchers: []*remote.LabelMatcher{
+			{
+				Type:  remote.MatchType_EQUAL,
+				Name:  "__name__",
+				Value: "value",
+			},
+		},
+		StartTimestampMs: 0,
+		EndTimestampMs:   models.MaxNanoTime / int64(time.Millisecond),
+	}}}
+	data, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatal("couldn't marshal prometheus request")
+	}
+	compressed := snappy.Encode(nil, data)
+	h := NewHandler(false)
+	w := httptest.NewRecorder()
+
+	b := bytes.NewReader(compressed)
+	h.ServeHTTP(w, MustNewJSONRequest("POST", "/api/v1/prom/read?db=foo", b))
+	if w.Code != http.StatusOK {
+		t.Fatalf("unexpected status: %d", w.Code)
+	}
+	reqBuf, err := snappy.Decode(nil, w.Body.Bytes())
+	if err != nil {
+		t.Fatal(err.Error())
+	}
+
+	var resp remote.ReadResponse
+	if err := proto.Unmarshal(reqBuf, &resp); err != nil {
+		t.Fatal(err.Error())
+	}
+}
+
+func TestHandler_PromRead_UnsupportedCursors(t *testing.T) {
+	req := &remote.ReadRequest{Queries: []*remote.Query{&remote.Query{
+		Matchers: []*remote.LabelMatcher{
+			{
+				Type:  remote.MatchType_EQUAL,
+				Name:  "__name__",
+				Value: "value",
+			},
+		},
+		StartTimestampMs: 0,
+		EndTimestampMs:   models.MaxNanoTime / int64(time.Millisecond),
+	}}}
+	data, err := proto.Marshal(req)
+	if err != nil {
+		t.Fatal("couldn't marshal prometheus request")
+	}
+	compressed := snappy.Encode(nil, data)
+
+	unsupported := []tsdb.Cursor{
+		internal.NewIntegerArrayCursorMock(),
+		internal.NewBooleanArrayCursorMock(),
+		internal.NewUnsignedArrayCursorMock(),
+		internal.NewStringArrayCursorMock(),
+	}
+
+	for _, cursor := range unsupported {
+		h := NewHandler(false)
+		w := httptest.NewRecorder()
+		var lb bytes.Buffer
+		h.Logger = logger.New(&lb)
+
+		more := true
+		h.Store.ResultSet.NextFn = func() bool { defer func() { more = false }(); return more }
+
+		// Set the cursor type that will be returned while iterating over
+		// the mock store.
+		h.Store.ResultSet.CursorFn = func() tsdb.Cursor {
+			return cursor
+		}
+
+		b := bytes.NewReader(compressed)
+		h.ServeHTTP(w, MustNewJSONRequest("POST", "/api/v1/prom/read?db=foo", b))
+		if w.Code != http.StatusOK {
+			t.Fatalf("unexpected status: %d", w.Code)
+		}
+		reqBuf, err := snappy.Decode(nil, w.Body.Bytes())
+		if err != nil {
+			t.Fatal(err.Error())
+		}
+
+		var resp remote.ReadResponse
+		if err := proto.Unmarshal(reqBuf, &resp); err != nil {
+			t.Fatal(err.Error())
+		}
+
+		if !strings.Contains(lb.String(), "cursor_type=") {
+			t.Fatalf("got log message %q, expected to contain \"cursor_type\"", lb.String())
+		}
+	}
+}
+
 // Ensure the handler handles ping requests correctly.
 // TODO: This should be expanded to verify the MetaClient check in servePing is working correctly
 func TestHandler_Ping(t *testing.T) {
@@ -526,7 +818,7 @@ func TestHandler_Ping(t *testing.T) {
 // Ensure the handler returns the version correctly from the different endpoints.
 func TestHandler_Version(t *testing.T) {
 	h := NewHandler(false)
-	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+	h.StatementExecutor.ExecuteStatementFn = func(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 		return nil
 	}
 	tests := []struct {
@@ -559,12 +851,20 @@ func TestHandler_Version(t *testing.T) {
 	for _, test := range tests {
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, MustNewRequest(test.method, test.endpoint, test.body))
-		if v, ok := w.HeaderMap["X-Influxdb-Version"]; ok {
+		if v := w.HeaderMap["X-Influxdb-Version"]; len(v) > 0 {
 			if v[0] != "0.0.0" {
 				t.Fatalf("unexpected version: %s", v)
 			}
 		} else {
 			t.Fatalf("Header entry 'X-Influxdb-Version' not present")
+		}
+
+		if v := w.HeaderMap["X-Influxdb-Build"]; len(v) > 0 {
+			if v[0] != "OSS" {
+				t.Fatalf("unexpected BuildType: %s", v)
+			}
+		} else {
+			t.Fatalf("Header entry 'X-Influxdb-Build' not present")
 		}
 	}
 }
@@ -594,6 +894,95 @@ func TestHandler_HandleBadRequestBody(t *testing.T) {
 	}
 }
 
+func TestHandler_Write_EntityTooLarge_ContentLength(t *testing.T) {
+	b := bytes.NewReader(make([]byte, 100))
+	h := NewHandler(false)
+	h.Config.MaxBodySize = 5
+	h.MetaClient.DatabaseFn = func(name string) *meta.DatabaseInfo {
+		return &meta.DatabaseInfo{}
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewRequest("POST", "/write?db=foo", b))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected status: %d", w.Code)
+	}
+}
+
+func TestHandler_Write_SuppressLog(t *testing.T) {
+	var buf bytes.Buffer
+	c := httpd.NewConfig()
+	c.SuppressWriteLog = true
+	h := NewHandlerWithConfig(c)
+	h.CLFLogger = log.New(&buf, "", log.LstdFlags)
+	h.MetaClient.DatabaseFn = func(name string) *meta.DatabaseInfo {
+		return &meta.DatabaseInfo{}
+	}
+	h.PointsWriter.WritePointsFn = func(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, user meta.User, points []models.Point) error {
+		return nil
+	}
+
+	b := strings.NewReader("cpu,host=server01 value=2\n")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewRequest("POST", "/write?db=foo", b))
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: %d", w.Code)
+	}
+
+	// If the log has anything in it, this failed.
+	if buf.Len() > 0 {
+		t.Fatalf("expected no bytes to be written to the log, got %d", buf.Len())
+	}
+}
+
+// onlyReader implements io.Reader only to ensure Request.ContentLength is not set
+type onlyReader struct {
+	r io.Reader
+}
+
+func (o onlyReader) Read(p []byte) (n int, err error) {
+	return o.r.Read(p)
+}
+
+func TestHandler_Write_EntityTooLarge_NoContentLength(t *testing.T) {
+	b := onlyReader{bytes.NewReader(make([]byte, 100))}
+	h := NewHandler(false)
+	h.Config.MaxBodySize = 5
+	h.MetaClient.DatabaseFn = func(name string) *meta.DatabaseInfo {
+		return &meta.DatabaseInfo{}
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewRequest("POST", "/write?db=foo", b))
+	if w.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("unexpected status: %d", w.Code)
+	}
+}
+
+// TestHandler_Write_NegativeMaxBodySize verifies no error occurs if MaxBodySize is < 0
+func TestHandler_Write_NegativeMaxBodySize(t *testing.T) {
+	b := bytes.NewReader([]byte(`foo n=1`))
+	h := NewHandler(false)
+	h.Config.MaxBodySize = -1
+	h.MetaClient.DatabaseFn = func(name string) *meta.DatabaseInfo {
+		return &meta.DatabaseInfo{}
+	}
+	called := false
+	h.PointsWriter.WritePointsFn = func(_, _ string, _ models.ConsistencyLevel, _ meta.User, _ []models.Point) error {
+		called = true
+		return nil
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, MustNewRequest("POST", "/write?db=foo", b))
+	if !called {
+		t.Fatal("WritePoints: expected call")
+	}
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("unexpected status: %d", w.Code)
+	}
+}
+
 // Ensure X-Forwarded-For header writes the correct log message.
 func TestHandler_XForwardedFor(t *testing.T) {
 	var buf bytes.Buffer
@@ -611,16 +1000,175 @@ func TestHandler_XForwardedFor(t *testing.T) {
 	}
 }
 
-type invalidJSON struct{}
+func TestHandler_XRequestId(t *testing.T) {
+	var buf bytes.Buffer
+	h := NewHandler(false)
+	h.CLFLogger = log.New(&buf, "", 0)
 
-func (*invalidJSON) MarshalJSON() ([]byte, error) { return nil, errors.New("marker") }
+	cases := []map[string]string{
+		{"X-Request-Id": "abc123", "Request-Id": ""},          // X-Request-Id is used.
+		{"X-REQUEST-ID": "cde", "Request-Id": ""},             // X-REQUEST-ID is used.
+		{"X-Request-Id": "", "Request-Id": "foobarzoo"},       // Request-Id is used.
+		{"X-Request-Id": "abc123", "Request-Id": "foobarzoo"}, // X-Request-Id takes precedence.
+		{"X-Request-Id": "", "Request-Id": ""},                // v1 UUID generated.
+	}
+
+	for _, c := range cases {
+		t.Run(fmt.Sprint(c), func(t *testing.T) {
+			buf.Reset()
+			req := MustNewRequest("GET", "/ping", nil)
+			req.RemoteAddr = "127.0.0.1"
+
+			// Set the relevant request ID headers
+			var allEmpty = true
+			for k, v := range c {
+				req.Header.Set(k, v)
+				if v != "" {
+					allEmpty = false
+				}
+			}
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, req)
+
+			// Split up the HTTP log line. The request ID is currently located in
+			// index 12. If the log line gets changed in the future, this test
+			// will likely break and the index will need to be updated.
+			parts := strings.Split(buf.String(), " ")
+			i := 12
+
+			// If neither header is set then we expect a v1 UUID to be generated.
+			if allEmpty {
+				if got, exp := len(parts[i]), 36; got != exp {
+					t.Fatalf("got ID of length %d, expected one of length %d", got, exp)
+				}
+			} else if c["X-Request-Id"] != "" {
+				if got, exp := parts[i], c["X-Request-Id"]; got != exp {
+					t.Fatalf("got ID of %q, expected %q", got, exp)
+				}
+			} else if c["X-REQUEST-ID"] != "" {
+				if got, exp := parts[i], c["X-REQUEST-ID"]; got != exp {
+					t.Fatalf("got ID of %q, expected %q", got, exp)
+				}
+			} else {
+				if got, exp := parts[i], c["Request-Id"]; got != exp {
+					t.Fatalf("got ID of %q, expected %q", got, exp)
+				}
+			}
+
+			// Check response headers
+			if got, exp := w.Header().Get("Request-Id"), parts[i]; got != exp {
+				t.Fatalf("Request-Id header was %s, expected %s", got, exp)
+			} else if got, exp := w.Header().Get("X-Request-Id"), parts[i]; got != exp {
+				t.Fatalf("X-Request-Id header was %s, expected %s", got, exp)
+			}
+		})
+	}
+}
+
+func TestThrottler_Handler(t *testing.T) {
+	t.Run("OK", func(t *testing.T) {
+		throttler := httpd.NewThrottler(2, 98)
+
+		// Send the total number of concurrent requests to the channel.
+		var concurrentN int32
+		concurrentCh := make(chan int)
+
+		h := throttler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			atomic.AddInt32(&concurrentN, 1)
+			concurrentCh <- int(atomic.LoadInt32(&concurrentN))
+			time.Sleep(1 * time.Millisecond)
+			atomic.AddInt32(&concurrentN, -1)
+		}))
+
+		// Execute requests concurrently.
+		const n = 100
+		for i := 0; i < n; i++ {
+			go func() { h.ServeHTTP(nil, nil) }()
+		}
+
+		// Read the number of concurrent requests for every execution.
+		for i := 0; i < n; i++ {
+			if v := <-concurrentCh; v > 2 {
+				t.Fatalf("concurrent requests exceed maximum: %d", v)
+			}
+		}
+	})
+
+	t.Run("ErrTimeout", func(t *testing.T) {
+		throttler := httpd.NewThrottler(2, 1)
+		throttler.EnqueueTimeout = 1 * time.Millisecond
+
+		begin, end := make(chan struct{}), make(chan struct{})
+		h := throttler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			begin <- struct{}{}
+			end <- struct{}{}
+		}))
+
+		// First two requests should execute immediately.
+		go func() { h.ServeHTTP(nil, nil) }()
+		go func() { h.ServeHTTP(nil, nil) }()
+
+		<-begin
+		<-begin
+
+		// Third request should be enqueued but timeout.
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, nil)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("unexpected status code: %d", w.Code)
+		} else if body := w.Body.String(); body != "request throttled, exceeds timeout\n" {
+			t.Fatalf("unexpected response body: %q", body)
+		}
+
+		// Allow 2 existing requests to complete.
+		<-end
+		<-end
+	})
+
+	t.Run("ErrFull", func(t *testing.T) {
+		delay := 100 * time.Millisecond
+		if os.Getenv("CI") != "" {
+			delay = 2 * time.Second
+		}
+
+		throttler := httpd.NewThrottler(2, 1)
+
+		resp := make(chan struct{})
+		h := throttler.Handler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			resp <- struct{}{}
+		}))
+
+		// First two requests should execute immediately and third should be queued.
+		go func() { h.ServeHTTP(nil, nil) }()
+		go func() { h.ServeHTTP(nil, nil) }()
+		go func() { h.ServeHTTP(nil, nil) }()
+		time.Sleep(delay)
+
+		// Fourth request should fail when trying to enqueue.
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, nil)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Fatalf("unexpected status code: %d", w.Code)
+		} else if body := w.Body.String(); body != "request throttled, queue full\n" {
+			t.Fatalf("unexpected response body: %q", body)
+		}
+
+		// Allow 3 existing requests to complete.
+		<-resp
+		<-resp
+		<-resp
+	})
+}
 
 // NewHandler represents a test wrapper for httpd.Handler.
 type Handler struct {
 	*httpd.Handler
-	MetaClient        HandlerMetaStore
+	MetaClient        *internal.MetaClientMock
 	StatementExecutor HandlerStatementExecutor
 	QueryAuthorizer   HandlerQueryAuthorizer
+	PointsWriter      HandlerPointsWriter
+	Store             *internal.StorageStoreMock
 }
 
 // NewHandler returns a new instance of Handler.
@@ -628,67 +1176,59 @@ func NewHandler(requireAuthentication bool) *Handler {
 	config := httpd.NewConfig()
 	config.AuthEnabled = requireAuthentication
 	config.SharedSecret = "super secret key"
+	return NewHandlerWithConfig(config)
+}
 
+func NewHandlerWithConfig(config httpd.Config) *Handler {
 	h := &Handler{
 		Handler: httpd.NewHandler(config),
 	}
-	h.Handler.MetaClient = &h.MetaClient
-	h.Handler.QueryExecutor = influxql.NewQueryExecutor()
+
+	h.MetaClient = &internal.MetaClientMock{}
+	h.Store = internal.NewStorageStoreMock()
+
+	h.Handler.MetaClient = h.MetaClient
+	h.Handler.Store = h.Store
+	h.Handler.QueryExecutor = query.NewExecutor()
 	h.Handler.QueryExecutor.StatementExecutor = &h.StatementExecutor
 	h.Handler.QueryAuthorizer = &h.QueryAuthorizer
+	h.Handler.PointsWriter = &h.PointsWriter
 	h.Handler.Version = "0.0.0"
-	return h
-}
+	h.Handler.BuildType = "OSS"
 
-// HandlerMetaStore is a mock implementation of Handler.MetaClient.
-type HandlerMetaStore struct {
-	PingFn         func(d time.Duration) error
-	DatabaseFn     func(name string) *meta.DatabaseInfo
-	AuthenticateFn func(username, password string) (ui *meta.UserInfo, err error)
-	UsersFn        func() []meta.UserInfo
-	UserFn         func(username string) (*meta.UserInfo, error)
-}
-
-func (s *HandlerMetaStore) Ping(b bool) error {
-	if s.PingFn == nil {
-		// Default behaviour is to assume there is a leader.
-		return nil
+	if testing.Verbose() {
+		l := logger.New(os.Stdout)
+		h.Handler.Logger = l
+		h.Handler.Store.WithLogger(l)
 	}
-	return s.Ping(b)
-}
 
-func (s *HandlerMetaStore) Database(name string) *meta.DatabaseInfo {
-	return s.DatabaseFn(name)
-}
-
-func (s *HandlerMetaStore) Authenticate(username, password string) (ui *meta.UserInfo, err error) {
-	return s.AuthenticateFn(username, password)
-}
-
-func (s *HandlerMetaStore) Users() []meta.UserInfo {
-	return s.UsersFn()
-}
-
-func (s *HandlerMetaStore) User(username string) (*meta.UserInfo, error) {
-	return s.UserFn(username)
+	return h
 }
 
 // HandlerStatementExecutor is a mock implementation of Handler.StatementExecutor.
 type HandlerStatementExecutor struct {
-	ExecuteStatementFn func(stmt influxql.Statement, ctx influxql.ExecutionContext) error
+	ExecuteStatementFn func(stmt influxql.Statement, ctx *query.ExecutionContext) error
 }
 
-func (e *HandlerStatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx influxql.ExecutionContext) error {
+func (e *HandlerStatementExecutor) ExecuteStatement(stmt influxql.Statement, ctx *query.ExecutionContext) error {
 	return e.ExecuteStatementFn(stmt, ctx)
 }
 
 // HandlerQueryAuthorizer is a mock implementation of Handler.QueryAuthorizer.
 type HandlerQueryAuthorizer struct {
-	AuthorizeQueryFn func(u *meta.UserInfo, query *influxql.Query, database string) error
+	AuthorizeQueryFn func(u meta.User, query *influxql.Query, database string) error
 }
 
-func (a *HandlerQueryAuthorizer) AuthorizeQuery(u *meta.UserInfo, query *influxql.Query, database string) error {
+func (a *HandlerQueryAuthorizer) AuthorizeQuery(u meta.User, query *influxql.Query, database string) error {
 	return a.AuthorizeQueryFn(u, query, database)
+}
+
+type HandlerPointsWriter struct {
+	WritePointsFn func(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, user meta.User, points []models.Point) error
+}
+
+func (h *HandlerPointsWriter) WritePoints(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, user meta.User, points []models.Point) error {
+	return h.WritePointsFn(database, retentionPolicy, consistencyLevel, user, points)
 }
 
 // MustNewRequest returns a new HTTP request. Panic on error.
@@ -705,21 +1245,6 @@ func MustNewJSONRequest(method, urlStr string, body io.Reader) *http.Request {
 	r := MustNewRequest(method, urlStr, body)
 	r.Header.Set("Accept", "application/json")
 	return r
-}
-
-// matchRegex returns true if a s matches pattern.
-func matchRegex(pattern, s string) bool {
-	return regexp.MustCompile(pattern).MatchString(s)
-}
-
-// NewResultChan returns a channel that sends all results and then closes.
-func NewResultChan(results ...*influxql.Result) <-chan *influxql.Result {
-	ch := make(chan *influxql.Result, len(results))
-	for _, r := range results {
-		ch <- r
-	}
-	close(ch)
-	return ch
 }
 
 // MustJWTToken returns a new JWT token and signed string or panics trying.

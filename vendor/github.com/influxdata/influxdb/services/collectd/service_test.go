@@ -3,21 +3,23 @@ package collectd
 import (
 	"encoding/hex"
 	"errors"
+	"io/ioutil"
 	"net"
 	"os"
+	"path"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/influxdata/influxdb/internal"
+	"github.com/influxdata/influxdb/logger"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/services/meta"
 	"github.com/influxdata/influxdb/toml"
-	"go.uber.org/zap"
 )
 
 func TestService_OpenClose(t *testing.T) {
-	service := NewTestService(1, time.Second)
+	service := NewTestService(1, time.Second, "split")
 
 	// Closing a closed service is fine.
 	if err := service.Service.Close(); err != nil {
@@ -53,12 +55,63 @@ func TestService_OpenClose(t *testing.T) {
 	}
 }
 
+// Test that the service can read types DB files from a directory.
+func TestService_Open_TypesDBDir(t *testing.T) {
+	t.Parallel()
+
+	// Make a temp dir to write types.db into.
+	tmpDir, err := ioutil.TempDir(os.TempDir(), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(tmpDir)
+
+	// Write types.db.
+	if err := ioutil.WriteFile(path.Join(tmpDir, "types.db"), []byte(typesDBText), 0777); err != nil {
+		t.Fatal(err)
+	}
+
+	// Setup config to read all files in the temp dir.
+	c := Config{
+		BindAddress:   "127.0.0.1:0",
+		Database:      "collectd_test",
+		BatchSize:     1000,
+		BatchDuration: toml.Duration(time.Second),
+		TypesDB:       tmpDir,
+	}
+
+	s := &TestService{
+		Config:     c,
+		Service:    NewService(c),
+		MetaClient: &internal.MetaClientMock{},
+	}
+
+	if testing.Verbose() {
+		s.Service.WithLogger(logger.New(os.Stderr))
+	}
+
+	s.MetaClient.CreateDatabaseFn = func(name string) (*meta.DatabaseInfo, error) {
+		return nil, nil
+	}
+
+	s.Service.PointsWriter = s
+	s.Service.MetaClient = s.MetaClient
+
+	if err := s.Service.Open(); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.Service.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // Test that the service checks / creates the target database every time we
 // try to write points.
 func TestService_CreatesDatabase(t *testing.T) {
 	t.Parallel()
 
-	s := NewTestService(1, time.Second)
+	s := NewTestService(1, time.Second, "split")
 
 	s.WritePointsFn = func(string, string, models.ConsistencyLevel, []models.Point) error {
 		return nil
@@ -142,7 +195,7 @@ func TestService_BatchSize(t *testing.T) {
 
 	for _, batchSize := range batchSizes {
 		func() {
-			s := NewTestService(batchSize, time.Second)
+			s := NewTestService(batchSize, time.Second, "split")
 
 			pointCh := make(chan models.Point)
 			s.WritePointsFn = func(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error {
@@ -175,16 +228,18 @@ func TestService_BatchSize(t *testing.T) {
 				t.Fatalf("only sent %d of %d bytes", n, len(testData))
 			}
 
-			points := []models.Point{}
+			var points []models.Point
+			timer := time.NewTimer(time.Second)
 		Loop:
 			for {
+				timer.Reset(time.Second)
 				select {
 				case p := <-pointCh:
 					points = append(points, p)
 					if len(points) == totalPoints {
 						break Loop
 					}
-				case <-time.After(time.Second):
+				case <-timer.C:
 					t.Logf("exp %d points, got %d", totalPoints, len(points))
 					t.Fatal("timed out waiting for points from collectd service")
 				}
@@ -204,13 +259,14 @@ func TestService_BatchSize(t *testing.T) {
 	}
 }
 
-// Test that the collectd service correctly batches points using BatchDuration.
-func TestService_BatchDuration(t *testing.T) {
+// Test that the parse-multi-value-plugin config works properly.
+// The other tests already verify the 'split' config, so this only runs the 'join' test.
+func TestService_ParseMultiValuePlugin(t *testing.T) {
 	t.Parallel()
 
-	totalPoints := len(expPoints)
+	totalPoints := len(expPointsTupled)
 
-	s := NewTestService(5000, 250*time.Millisecond)
+	s := NewTestService(1, time.Second, "join")
 
 	pointCh := make(chan models.Point, 1000)
 	s.WritePointsFn = func(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error {
@@ -239,16 +295,80 @@ func TestService_BatchDuration(t *testing.T) {
 		t.Fatalf("only sent %d of %d bytes", n, len(testData))
 	}
 
-	points := []models.Point{}
+	var points []models.Point
+
+	timer := time.NewTimer(time.Second)
 Loop:
 	for {
+		timer.Reset(time.Second)
 		select {
 		case p := <-pointCh:
 			points = append(points, p)
 			if len(points) == totalPoints {
 				break Loop
 			}
-		case <-time.After(time.Second):
+		case <-timer.C:
+			t.Logf("exp %d points, got %d", totalPoints, len(points))
+			t.Fatal("timed out waiting for points from collectd service")
+		}
+	}
+
+	for i, exp := range expPointsTupled {
+		got := points[i].String()
+		if got != exp {
+			t.Fatalf("\n\texp = %s\n\tgot = %s\n", exp, got)
+		}
+	}
+
+}
+
+// Test that the collectd service correctly batches points using BatchDuration.
+func TestService_BatchDuration(t *testing.T) {
+	t.Parallel()
+
+	totalPoints := len(expPoints)
+
+	s := NewTestService(5000, 250*time.Millisecond, "split")
+
+	pointCh := make(chan models.Point, 1000)
+	s.WritePointsFn = func(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error {
+		for _, p := range points {
+			pointCh <- p
+		}
+		return nil
+	}
+
+	if err := s.Service.Open(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { t.Log("closing service"); s.Service.Close() }()
+
+	// Get the address & port the service is listening on for collectd data.
+	addr := s.Service.Addr()
+	conn, err := net.Dial("udp", addr.String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Send the test data to the service.
+	if n, err := conn.Write(testData); err != nil {
+		t.Fatal(err)
+	} else if n != len(testData) {
+		t.Fatalf("only sent %d of %d bytes", n, len(testData))
+	}
+
+	var points []models.Point
+	timer := time.NewTimer(time.Second)
+Loop:
+	for {
+		timer.Reset(time.Second)
+		select {
+		case p := <-pointCh:
+			points = append(points, p)
+			if len(points) == totalPoints {
+				break Loop
+			}
+		case <-timer.C:
 			t.Logf("exp %d points, got %d", totalPoints, len(points))
 			t.Fatal("timed out waiting for points from collectd service")
 		}
@@ -273,12 +393,13 @@ type TestService struct {
 	WritePointsFn func(string, string, models.ConsistencyLevel, []models.Point) error
 }
 
-func NewTestService(batchSize int, batchDuration time.Duration) *TestService {
+func NewTestService(batchSize int, batchDuration time.Duration, parseOpt string) *TestService {
 	c := Config{
-		BindAddress:   "127.0.0.1:0",
-		Database:      "collectd_test",
-		BatchSize:     batchSize,
-		BatchDuration: toml.Duration(batchDuration),
+		BindAddress:           "127.0.0.1:0",
+		Database:              "collectd_test",
+		BatchSize:             batchSize,
+		BatchDuration:         toml.Duration(batchDuration),
+		ParseMultiValuePlugin: parseOpt,
 	}
 
 	s := &TestService{
@@ -300,35 +421,14 @@ func NewTestService(batchSize int, batchDuration time.Duration) *TestService {
 	}
 
 	if testing.Verbose() {
-		s.Service.WithLogger(zap.New(
-			zap.NewTextEncoder(),
-			zap.Output(os.Stderr),
-		))
+		s.Service.WithLogger(logger.New(os.Stderr))
 	}
 
 	return s
 }
 
-func (w *TestService) WritePoints(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error {
+func (w *TestService) WritePointsPrivileged(database, retentionPolicy string, consistencyLevel models.ConsistencyLevel, points []models.Point) error {
 	return w.WritePointsFn(database, retentionPolicy, consistencyLevel, points)
-}
-
-func wait(c chan struct{}, d time.Duration) (err error) {
-	select {
-	case <-c:
-	case <-time.After(d):
-		err = errors.New("timed out")
-	}
-	return
-}
-
-func waitInt(c chan int, d time.Duration) (i int, err error) {
-	select {
-	case i = <-c:
-	case <-time.After(d):
-		err = errors.New("timed out")
-	}
-	return
 }
 
 func check(err error) {
@@ -395,6 +495,28 @@ var expPoints = []string{
 	"interface_tx,host=pf1-62-210-94-173,type=if_errors,type_instance=dummy0 value=0 1414080767000000000",
 	"cpu_value,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=wait value=0 1414080767000000000",
 	"cpu_value,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=interrupt value=306 1414080767000000000",
+}
+
+var expPointsTupled = []string{
+	"entropy,host=pf1-62-210-94-173,type=entropy value=288 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=1,type=cpu,type_instance=idle value=10908770 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=1,type=cpu,type_instance=wait value=0 1414080767000000000",
+	"df,host=pf1-62-210-94-173,type=df,type_instance=live-cow free=50287988736,used=378576896 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=1,type=cpu,type_instance=interrupt value=254 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=1,type=cpu,type_instance=softirq value=0 1414080767000000000",
+	"df,host=pf1-62-210-94-173,type=df,type_instance=live free=50666565632,used=0 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=1,type=cpu,type_instance=steal value=0 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=user value=24374 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=nice value=2776 1414080767000000000",
+	"interface,host=pf1-62-210-94-173,type=if_octets,type_instance=dummy0 rx=0,tx=1050 1414080767000000000",
+	"df,host=pf1-62-210-94-173,type=df,type_instance=tmp free=50666491904,used=73728 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=system value=17875 1414080767000000000",
+	"interface,host=pf1-62-210-94-173,type=if_packets,type_instance=dummy0 rx=0,tx=15 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=idle value=10904704 1414080767000000000",
+	"df,host=pf1-62-210-94-173,type=df,type_instance=run-lock free=5242880,used=0 1414080767000000000",
+	"interface,host=pf1-62-210-94-173,type=if_errors,type_instance=dummy0 rx=0,tx=0 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=wait value=0 1414080767000000000",
+	"cpu,host=pf1-62-210-94-173,instance=2,type=cpu,type_instance=interrupt value=306 1414080767000000000",
 }
 
 // Taken from /usr/share/collectd/types.db on a Ubuntu system

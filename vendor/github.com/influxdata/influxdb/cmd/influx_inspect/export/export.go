@@ -1,3 +1,4 @@
+// Package export exports TSM files into InfluxDB line protocol format.
 package export
 
 import (
@@ -15,10 +16,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/influxdb/models"
 	"github.com/influxdata/influxdb/pkg/escape"
 	"github.com/influxdata/influxdb/tsdb/engine/tsm1"
+	"github.com/influxdata/influxql"
 )
 
 // Command represents the program execution for "influx_inspect export".
@@ -260,6 +261,10 @@ func (cmd *Command) writeTsmFiles(w io.Writer, files []string) error {
 func (cmd *Command) exportTSMFile(tsmFilePath string, w io.Writer) error {
 	f, err := os.Open(tsmFilePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(w, "skipped missing file: %s", tsmFilePath)
+			return nil
+		}
 		return err
 	}
 	defer f.Close()
@@ -277,15 +282,15 @@ func (cmd *Command) exportTSMFile(tsmFilePath string, w io.Writer) error {
 
 	for i := 0; i < r.KeyCount(); i++ {
 		key, _ := r.KeyAt(i)
-		values, err := r.ReadAll(string(key))
+		values, err := r.ReadAll(key)
 		if err != nil {
 			fmt.Fprintf(cmd.Stderr, "unable to read key %q in %s, skipping: %s\n", string(key), tsmFilePath, err.Error())
 			continue
 		}
 		measurement, field := tsm1.SeriesAndFieldFromCompositeKey(key)
-		field = escape.String(field)
+		field = escape.Bytes(field)
 
-		if err := cmd.writeValues(w, measurement, field, values); err != nil {
+		if err := cmd.writeValues(w, measurement, string(field), values); err != nil {
 			// An error from writeValues indicates an IO error, which should be returned.
 			return err
 		}
@@ -324,6 +329,10 @@ or manually editing the exported file.
 func (cmd *Command) exportWALFile(walFilePath string, w io.Writer, warnDelete func()) error {
 	f, err := os.Open(walFilePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Fprintf(w, "skipped missing file: %s", walFilePath)
+			return nil
+		}
 		return err
 	}
 	defer f.Close()
@@ -335,7 +344,7 @@ func (cmd *Command) exportWALFile(walFilePath string, w io.Writer, warnDelete fu
 		entry, err := r.Read()
 		if err != nil {
 			n := r.Count()
-			fmt.Fprintf(cmd.Stderr, "file %s corrupt at position %d", walFilePath, n)
+			fmt.Fprintf(cmd.Stderr, "file %s corrupt at position %d: %v", walFilePath, n, err)
 			break
 		}
 
@@ -347,9 +356,9 @@ func (cmd *Command) exportWALFile(walFilePath string, w io.Writer, warnDelete fu
 			for key, values := range t.Values {
 				measurement, field := tsm1.SeriesAndFieldFromCompositeKey([]byte(key))
 				// measurements are stored escaped, field names are not
-				field = escape.String(field)
+				field = escape.Bytes(field)
 
-				if err := cmd.writeValues(w, measurement, field, values); err != nil {
+				if err := cmd.writeValues(w, measurement, string(field), values); err != nil {
 					// An error from writeValues indicates an IO error, which should be returned.
 					return err
 				}
@@ -381,6 +390,9 @@ func (cmd *Command) writeValues(w io.Writer, seriesKey []byte, field string, val
 		case int64:
 			buf = strconv.AppendInt(buf, v, 10)
 			buf = append(buf, 'i')
+		case uint64:
+			buf = strconv.AppendUint(buf, v, 10)
+			buf = append(buf, 'u')
 		case bool:
 			buf = strconv.AppendBool(buf, v)
 		case string:

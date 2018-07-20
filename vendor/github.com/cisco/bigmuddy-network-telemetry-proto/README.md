@@ -10,7 +10,7 @@ defined in `.proto` files. The `.proto` files are organised in a
 directory structure which matches the yang model.
 
 Note: Model driven telemetry project is work in progress, and both the
-on and off box components of are likely to evolve.
+on and off box components are likely to evolve.
 
 Content in `proto_archive` as follows:
 

@@ -1,7 +1,9 @@
+// Package cli contains the logic of the influx command line client.
 package cli // import "github.com/influxdata/influxdb/cmd/influx/cli"
 
 import (
 	"bytes"
+	"context"
 	"encoding/csv"
 	"encoding/json"
 	"errors"
@@ -9,9 +11,12 @@ import (
 	"io"
 	"io/ioutil"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -22,19 +27,15 @@ import (
 
 	"github.com/influxdata/influxdb/client"
 	"github.com/influxdata/influxdb/importer/v8"
-	"github.com/influxdata/influxdb/influxql"
 	"github.com/influxdata/influxdb/models"
+	"github.com/influxdata/influxql"
 	"github.com/peterh/liner"
-)
-
-const (
-	noTokenMsg = "Visit https://enterprise.influxdata.com to register for updates, InfluxDB server management, and monitoring.\n"
 )
 
 // ErrBlankCommand is returned when a parsed command is empty.
 var ErrBlankCommand = errors.New("empty input")
 
-// CommandLine holds CLI configuration and state
+// CommandLine holds CLI configuration and state.
 type CommandLine struct {
 	Line            *liner.State
 	Host            string
@@ -50,6 +51,8 @@ type CommandLine struct {
 	ShowVersion     bool
 	Import          bool
 	Chunked         bool
+	ChunkSize       int
+	NodeID          int
 	Quit            chan struct{}
 	IgnoreSignals   bool // Ignore signals normally caught by this process (used primarily for testing)
 	ForceTTY        bool // Force the CLI to act as if it were connected to a TTY
@@ -61,16 +64,17 @@ type CommandLine struct {
 	ImporterConfig v8.Config     // Importer configuration options.
 }
 
-// New returns an instance of CommandLine
+// New returns an instance of CommandLine with the specified client version.
 func New(version string) *CommandLine {
 	return &CommandLine{
 		ClientVersion: version,
 		Quit:          make(chan struct{}, 1),
 		osSignals:     make(chan os.Signal, 1),
+		Chunked:       true,
 	}
 }
 
-// Run executes the CLI
+// Run executes the CLI.
 func (c *CommandLine) Run() error {
 	hasTTY := c.ForceTTY || terminal.IsTerminal(int(os.Stdin.Fd()))
 
@@ -86,7 +90,7 @@ func (c *CommandLine) Run() error {
 
 	// Check if we will be able to prompt for the password later.
 	if promptForPassword && !hasTTY {
-		return errors.New("Unable to prompt for a password with no TTY.")
+		return errors.New("unable to prompt for a password with no TTY")
 	}
 
 	// Read environment variables for username/password.
@@ -110,9 +114,26 @@ func (c *CommandLine) Run() error {
 	}
 
 	if err := c.Connect(""); err != nil {
-		return fmt.Errorf(
-			"Failed to connect to %s: %s\nPlease check your connection settings and ensure 'influxd' is running.",
-			c.Client.Addr(), err.Error())
+		msg := "Please check your connection settings and ensure 'influxd' is running."
+		if !c.Ssl && strings.Contains(err.Error(), "malformed HTTP response") {
+			// Attempt to connect with SSL and disable secure SSL for this test.
+			c.Ssl = true
+			unsafeSsl := c.ClientConfig.UnsafeSsl
+			c.ClientConfig.UnsafeSsl = true
+			if err := c.Connect(""); err == nil {
+				msg = "Please use the -ssl flag to connect using SSL."
+			}
+			c.Ssl = false
+			c.ClientConfig.UnsafeSsl = unsafeSsl
+		} else if c.Ssl && !c.ClientConfig.UnsafeSsl && strings.Contains(err.Error(), "certificate is valid for") {
+			// Attempt to connect with an insecure connection just to see if it works.
+			c.ClientConfig.UnsafeSsl = true
+			if err := c.Connect(""); err == nil {
+				msg = "You may use -unsafeSsl to connect anyway, but the SSL connection will not be secure."
+			}
+			c.ClientConfig.UnsafeSsl = false
+		}
+		return fmt.Errorf("Failed to connect to %s: %s\n%s", c.Client.Addr(), err.Error(), msg)
 	}
 
 	// Modify precision.
@@ -145,7 +166,7 @@ func (c *CommandLine) Run() error {
 
 		i := v8.NewImporter(config)
 		if err := i.Import(); err != nil {
-			err = fmt.Errorf("ERROR: %s\n", err)
+			err = fmt.Errorf("ERROR: %s", err)
 			return err
 		}
 		return nil
@@ -169,21 +190,30 @@ func (c *CommandLine) Run() error {
 
 	c.Line.SetMultiLineMode(true)
 
-	token, err := c.DatabaseToken()
-	if err != nil {
-		return fmt.Errorf("Failed to check token: %s", err.Error())
+	if len(c.ServerVersion) == 0 {
+		fmt.Printf("WARN: Connected to %s, but found no server version.\n", c.Client.Addr())
+		fmt.Printf("Are you sure an InfluxDB server is listening at the given address?\n")
+	} else {
+		fmt.Printf("Connected to %s version %s\n", c.Client.Addr(), c.ServerVersion)
 	}
-	if token == "" {
-		fmt.Printf(noTokenMsg)
-	}
-	fmt.Printf("Connected to %s version %s\n", c.Client.Addr(), c.ServerVersion)
 
 	c.Version()
 
 	// Only load/write history if HOME environment variable is set.
+	var historyDir string
+	if runtime.GOOS == "windows" {
+		if userDir := os.Getenv("USERPROFILE"); userDir != "" {
+			historyDir = userDir
+		}
+	}
+
 	if homeDir := os.Getenv("HOME"); homeDir != "" {
-		// Attempt to load the history file.
-		c.historyFilePath = filepath.Join(homeDir, ".influx_history")
+		historyDir = homeDir
+	}
+
+	// Attempt to load the history file.
+	if historyDir != "" {
+		c.historyFilePath = filepath.Join(historyDir, ".influx_history")
 		if historyFile, err := os.Open(c.historyFilePath); err == nil {
 			c.Line.ReadHistory(historyFile)
 			historyFile.Close()
@@ -214,6 +244,7 @@ func (c *CommandLine) mainLoop() error {
 				return e
 			}
 			if err := c.ParseCommand(l); err != ErrBlankCommand && !strings.HasPrefix(strings.TrimSpace(l), "auth") {
+				l = influxql.Sanitize(l)
 				c.Line.AppendHistory(l)
 				c.saveHistory()
 			}
@@ -221,7 +252,8 @@ func (c *CommandLine) mainLoop() error {
 	}
 }
 
-// ParseCommand parses an instruction and calls related method, if any
+// ParseCommand parses an instruction and calls the related method
+// or executes the command as a query against InfluxDB.
 func (c *CommandLine) ParseCommand(cmd string) error {
 	lcmd := strings.TrimSpace(strings.ToLower(cmd))
 	tokens := strings.Fields(lcmd)
@@ -248,6 +280,15 @@ func (c *CommandLine) ParseCommand(cmd string) error {
 			c.SetWriteConsistency(cmd)
 		case "settings":
 			c.Settings()
+		case "chunked":
+			c.Chunked = !c.Chunked
+			if c.Chunked {
+				fmt.Println("chunked responses enabled")
+			} else {
+				fmt.Println("chunked reponses disabled")
+			}
+		case "chunk":
+			c.SetChunkSize(cmd)
 		case "pretty":
 			c.Pretty = !c.Pretty
 			if c.Pretty {
@@ -257,6 +298,8 @@ func (c *CommandLine) ParseCommand(cmd string) error {
 			}
 		case "use":
 			c.use(cmd)
+		case "node":
+			c.node(cmd)
 		case "insert":
 			return c.Insert(cmd)
 		case "clear":
@@ -270,8 +313,11 @@ func (c *CommandLine) ParseCommand(cmd string) error {
 	return ErrBlankCommand
 }
 
-// Connect connects client to a server
+// Connect connects to a server.
 func (c *CommandLine) Connect(cmd string) error {
+	// normalize cmd
+	cmd = strings.ToLower(cmd)
+
 	// Remove the "connect" keyword if it exists
 	addr := strings.TrimSpace(strings.Replace(cmd, "connect", "", -1))
 	if addr == "" {
@@ -288,6 +334,7 @@ func (c *CommandLine) Connect(cmd string) error {
 	ClientConfig := c.ClientConfig
 	ClientConfig.UserAgent = "InfluxDBShell/" + c.ClientVersion
 	ClientConfig.URL = URL
+	ClientConfig.Proxy = http.ProxyFromEnvironment
 
 	client, err := client.NewClient(ClientConfig)
 	if err != nil {
@@ -297,7 +344,7 @@ func (c *CommandLine) Connect(cmd string) error {
 
 	_, v, err := c.Client.Ping()
 	if err != nil {
-		return fmt.Errorf("Failed to connect to %s: %v\n", c.Client.Addr(), err)
+		return err
 	}
 	c.ServerVersion = v
 
@@ -312,7 +359,7 @@ func (c *CommandLine) Connect(cmd string) error {
 	return nil
 }
 
-// SetAuth sets client authentication credentials
+// SetAuth sets client authentication credentials.
 func (c *CommandLine) SetAuth(cmd string) {
 	// If they pass in the entire command, we should parse it
 	// auth <username> <password>
@@ -374,7 +421,7 @@ func (c *CommandLine) clear(cmd string) {
 }
 
 func (c *CommandLine) use(cmd string) {
-	args := strings.Split(strings.TrimSuffix(strings.TrimSpace(cmd), ";"), " ")
+	args := strings.SplitAfterN(strings.TrimSuffix(strings.TrimSpace(cmd), ";"), " ", 2)
 	if len(args) != 2 {
 		fmt.Printf("Could not parse database name from %q.\n", cmd)
 		return
@@ -388,6 +435,7 @@ func (c *CommandLine) use(cmd string) {
 	}
 
 	if !c.databaseExists(db) {
+		fmt.Println("DB does not exist!")
 		return
 	}
 
@@ -482,7 +530,52 @@ func (c *CommandLine) retentionPolicyExists(db, rp string) bool {
 	return true
 }
 
-// SetPrecision sets client precision
+func (c *CommandLine) node(cmd string) {
+	args := strings.Split(strings.TrimSuffix(strings.TrimSpace(cmd), ";"), " ")
+	if len(args) != 2 {
+		fmt.Println("Improper number of arguments for 'node' command, requires exactly one.")
+		return
+	}
+
+	if args[1] == "clear" {
+		c.NodeID = 0
+		return
+	}
+
+	id, err := strconv.Atoi(args[1])
+	if err != nil {
+		fmt.Printf("Unable to parse node id from %s. Must be an integer or 'clear'.\n", args[1])
+		return
+	}
+	c.NodeID = id
+}
+
+// SetChunkSize sets the chunk size
+// 0 sets it back to the default
+func (c *CommandLine) SetChunkSize(cmd string) {
+	// normalize cmd
+	cmd = strings.ToLower(cmd)
+	cmd = strings.Join(strings.Fields(cmd), " ")
+
+	// Remove the "chunk size" keyword if it exists
+	cmd = strings.TrimPrefix(cmd, "chunk size ")
+
+	// Remove the "chunk" keyword if it exists
+	// allows them to use `chunk 50` as a shortcut
+	cmd = strings.TrimPrefix(cmd, "chunk ")
+
+	if n, err := strconv.ParseInt(cmd, 10, 64); err == nil {
+		c.ChunkSize = int(n)
+		if c.ChunkSize <= 0 {
+			c.ChunkSize = 0
+		}
+		fmt.Printf("chunk size set to %d\n", c.ChunkSize)
+	} else {
+		fmt.Printf("unable to parse chunk size from %q\n", cmd)
+	}
+}
+
+// SetPrecision sets client precision.
 func (c *CommandLine) SetPrecision(cmd string) {
 	// normalize cmd
 	cmd = strings.ToLower(cmd)
@@ -502,12 +595,12 @@ func (c *CommandLine) SetPrecision(cmd string) {
 	}
 }
 
-// SetFormat sets output format
+// SetFormat sets output format.
 func (c *CommandLine) SetFormat(cmd string) {
-	// Remove the "format" keyword if it exists
-	cmd = strings.TrimSpace(strings.Replace(cmd, "format", "", -1))
 	// normalize cmd
 	cmd = strings.ToLower(cmd)
+	// Remove the "format" keyword if it exists
+	cmd = strings.TrimSpace(strings.Replace(cmd, "format", "", -1))
 
 	switch cmd {
 	case "json", "csv", "column":
@@ -517,12 +610,12 @@ func (c *CommandLine) SetFormat(cmd string) {
 	}
 }
 
-// SetWriteConsistency sets cluster consistency level
+// SetWriteConsistency sets write consistency level.
 func (c *CommandLine) SetWriteConsistency(cmd string) {
-	// Remove the "consistency" keyword if it exists
-	cmd = strings.TrimSpace(strings.Replace(cmd, "consistency", "", -1))
 	// normalize cmd
 	cmd = strings.ToLower(cmd)
+	// Remove the "consistency" keyword if it exists
+	cmd = strings.TrimSpace(strings.Replace(cmd, "consistency", "", -1))
 
 	_, err := models.ParseConsistencyLevel(cmd)
 	if err != nil {
@@ -613,7 +706,7 @@ func (c *CommandLine) parseInto(stmt string) *client.BatchPoints {
 func (c *CommandLine) parseInsert(stmt string) (*client.BatchPoints, error) {
 	i, point := parseNextIdentifier(stmt)
 	if !strings.EqualFold(i, "insert") {
-		return nil, fmt.Errorf("found %s, expected INSERT\n", i)
+		return nil, fmt.Errorf("found %s, expected INSERT", i)
 	}
 	if i, r := parseNextIdentifier(point); strings.EqualFold(i, "into") {
 		bp := c.parseInto(r)
@@ -630,7 +723,7 @@ func (c *CommandLine) parseInsert(stmt string) (*client.BatchPoints, error) {
 	}, nil
 }
 
-// Insert runs an INSERT statement
+// Insert runs an INSERT statement.
 func (c *CommandLine) Insert(stmt string) error {
 	bp, err := c.parseInsert(stmt)
 	if err != nil {
@@ -651,13 +744,16 @@ func (c *CommandLine) Insert(stmt string) error {
 // query creates a query struct to be used with the client.
 func (c *CommandLine) query(query string) client.Query {
 	return client.Query{
-		Command:  query,
-		Database: c.Database,
-		Chunked:  true,
+		Command:         query,
+		Database:        c.Database,
+		RetentionPolicy: c.RetentionPolicy,
+		Chunked:         c.Chunked,
+		ChunkSize:       c.ChunkSize,
+		NodeID:          c.NodeID,
 	}
 }
 
-// ExecuteQuery runs any query statement
+// ExecuteQuery runs any query statement.
 func (c *CommandLine) ExecuteQuery(query string) error {
 	// If we have a retention policy, we need to rewrite the statement sources
 	if c.RetentionPolicy != "" {
@@ -682,8 +778,31 @@ func (c *CommandLine) ExecuteQuery(query string) error {
 		}
 		query = pq.String()
 	}
-	response, err := c.Client.Query(c.query(query))
+
+	ctx := context.Background()
+	if !c.IgnoreSignals {
+		done := make(chan struct{})
+		defer close(done)
+
+		var cancel func()
+		ctx, cancel = context.WithCancel(ctx)
+		go func() {
+			select {
+			case <-done:
+			case <-c.osSignals:
+				cancel()
+			}
+		}()
+	}
+
+	response, err := c.Client.QueryContext(ctx, c.query(query))
 	if err != nil {
+		if err.Error() == "" {
+			err = ctx.Err()
+			if err == context.Canceled {
+				err = errors.New("aborted by user")
+			}
+		}
 		fmt.Printf("ERR: %s\n", err)
 		return err
 	}
@@ -699,27 +818,7 @@ func (c *CommandLine) ExecuteQuery(query string) error {
 	return nil
 }
 
-// DatabaseToken retrieves database token
-func (c *CommandLine) DatabaseToken() (string, error) {
-	response, err := c.Client.Query(c.query("SHOW DIAGNOSTICS for 'registration'"))
-	if err != nil {
-		return "", err
-	}
-
-	if response.Error() != nil || len(response.Results) == 0 || len(response.Results[0].Series) == 0 {
-		return "", nil
-	}
-
-	// Look for position of "token" column.
-	for i, s := range (*response).Results[0].Series[0].Columns {
-		if s == "token" {
-			return (*response).Results[0].Series[0].Values[0][i].(string), nil
-		}
-	}
-	return "", nil
-}
-
-// FormatResponse formats output to previsouly chosen format
+// FormatResponse formats output to the previously chosen format.
 func (c *CommandLine) FormatResponse(response *client.Response, w io.Writer) {
 	switch c.Format {
 	case "json":
@@ -748,16 +847,41 @@ func (c *CommandLine) writeJSON(response *client.Response, w io.Writer) {
 	fmt.Fprintln(w, string(data))
 }
 
+func tagsEqual(prev, current map[string]string) bool {
+	return reflect.DeepEqual(prev, current)
+}
+
+func columnsEqual(prev, current []string) bool {
+	return reflect.DeepEqual(prev, current)
+}
+
+func headersEqual(prev, current models.Row) bool {
+	if prev.Name != current.Name {
+		return false
+	}
+	return tagsEqual(prev.Tags, current.Tags) && columnsEqual(prev.Columns, current.Columns)
+}
+
 func (c *CommandLine) writeCSV(response *client.Response, w io.Writer) {
 	csvw := csv.NewWriter(w)
+	var previousHeaders models.Row
 	for _, result := range response.Results {
+		suppressHeaders := len(result.Series) > 0 && headersEqual(previousHeaders, result.Series[0])
+		if !suppressHeaders && len(result.Series) > 0 {
+			previousHeaders = models.Row{
+				Name:    result.Series[0].Name,
+				Tags:    result.Series[0].Tags,
+				Columns: result.Series[0].Columns,
+			}
+		}
+
 		// Create a tabbed writer for each result as they won't always line up
-		rows := c.formatResults(result, "\t")
+		rows := c.formatResults(result, "\t", suppressHeaders)
 		for _, r := range rows {
 			csvw.Write(strings.Split(r, "\t"))
 		}
-		csvw.Flush()
 	}
+	csvw.Flush()
 }
 
 func (c *CommandLine) writeColumns(response *client.Response, w io.Writer) {
@@ -765,21 +889,40 @@ func (c *CommandLine) writeColumns(response *client.Response, w io.Writer) {
 	writer := new(tabwriter.Writer)
 	writer.Init(w, 0, 8, 1, ' ', 0)
 
-	for _, result := range response.Results {
+	var previousHeaders models.Row
+	for i, result := range response.Results {
 		// Print out all messages first
 		for _, m := range result.Messages {
 			fmt.Fprintf(w, "%s: %s.\n", m.Level, m.Text)
 		}
-		csv := c.formatResults(result, "\t")
-		for _, r := range csv {
+		// Check to see if the headers are the same as the previous row.  If so, suppress them in the output
+		suppressHeaders := len(result.Series) > 0 && headersEqual(previousHeaders, result.Series[0])
+		if !suppressHeaders && len(result.Series) > 0 {
+			previousHeaders = models.Row{
+				Name:    result.Series[0].Name,
+				Tags:    result.Series[0].Tags,
+				Columns: result.Series[0].Columns,
+			}
+		}
+
+		// If we are suppressing headers, don't output the extra line return. If we
+		// aren't suppressing headers, then we put out line returns between results
+		// (not before the first result, and not after the last result).
+		if !suppressHeaders && i > 0 {
+			fmt.Fprintln(writer, "")
+		}
+
+		rows := c.formatResults(result, "\t", suppressHeaders)
+		for _, r := range rows {
 			fmt.Fprintln(writer, r)
 		}
-		writer.Flush()
+
 	}
+	writer.Flush()
 }
 
 // formatResults will behave differently if you are formatting for columns or csv
-func (c *CommandLine) formatResults(result client.Result, separator string) []string {
+func (c *CommandLine) formatResults(result client.Result, separator string, suppressHeaders bool) []string {
 	rows := []string{}
 	// Create a tabbed writer for each result as they won't always line up
 	for i, row := range result.Series {
@@ -803,17 +946,15 @@ func (c *CommandLine) formatResults(result client.Result, separator string) []st
 			}
 		}
 
-		for _, column := range row.Columns {
-			columnNames = append(columnNames, column)
-		}
+		columnNames = append(columnNames, row.Columns...)
 
 		// Output a line separator if we have more than one set or results and format is column
-		if i > 0 && c.Format == "column" {
+		if i > 0 && c.Format == "column" && !suppressHeaders {
 			rows = append(rows, "")
 		}
 
 		// If we are column format, we break out the name/tag to separate lines
-		if c.Format == "column" {
+		if c.Format == "column" && !suppressHeaders {
 			if row.Name != "" {
 				n := fmt.Sprintf("name: %s", row.Name)
 				rows = append(rows, n)
@@ -824,10 +965,12 @@ func (c *CommandLine) formatResults(result client.Result, separator string) []st
 			}
 		}
 
-		rows = append(rows, strings.Join(columnNames, separator))
+		if !suppressHeaders {
+			rows = append(rows, strings.Join(columnNames, separator))
+		}
 
 		// if format is column, write dashes under each column
-		if c.Format == "column" {
+		if c.Format == "column" && !suppressHeaders {
 			lines := []string{}
 			for _, columnName := range columnNames {
 				lines = append(lines, strings.Repeat("-", len(columnName)))
@@ -851,10 +994,6 @@ func (c *CommandLine) formatResults(result client.Result, separator string) []st
 			}
 			rows = append(rows, strings.Join(values, separator))
 		}
-		// Output a line separator if in column format
-		if c.Format == "column" {
-			rows = append(rows, "")
-		}
 	}
 	return rows
 }
@@ -874,7 +1013,7 @@ func interfaceToString(v interface{}) string {
 	}
 }
 
-// Settings prints current settings
+// Settings prints current settings.
 func (c *CommandLine) Settings() {
 	w := new(tabwriter.Writer)
 	w.Init(os.Stdout, 0, 1, 1, ' ', 0)
@@ -891,6 +1030,8 @@ func (c *CommandLine) Settings() {
 	fmt.Fprintf(w, "Pretty\t%v\n", c.Pretty)
 	fmt.Fprintf(w, "Format\t%s\n", c.Format)
 	fmt.Fprintf(w, "Write Consistency\t%s\n", c.ClientConfig.WriteConsistency)
+	fmt.Fprintf(w, "Chunked\t%v\n", c.Chunked)
+	fmt.Fprintf(w, "Chunk Size\t%d\n", c.ChunkSize)
 	fmt.Fprintln(w)
 	w.Flush()
 }
@@ -900,6 +1041,8 @@ func (c *CommandLine) help() {
         connect <host:port>   connects to another node specified by host:port
         auth                  prompts for username and password
         pretty                toggles pretty print for the json format
+        chunked               turns on chunked responses from server
+        chunk size <size>     sets the size of the chunked responses.  Set to 0 to reset to the default chunked size
         use <db_name>         sets current database
         format <format>       specifies the format of the server responses: json, csv, or column
         precision <format>    specifies the format of the timestamp: rfc3339, h, m, s, ms, u or ns
@@ -916,8 +1059,7 @@ func (c *CommandLine) help() {
         show field keys       show field key information
 
         A full list of influxql commands can be found at:
-        https://docs.influxdata.com/influxdb/latest/query_language/spec/
-`)
+        https://docs.influxdata.com/influxdb/latest/query_language/spec/`)
 }
 
 func (c *CommandLine) history() {
@@ -927,6 +1069,9 @@ func (c *CommandLine) history() {
 }
 
 func (c *CommandLine) saveHistory() {
+	if c.historyFilePath == "" {
+		return
+	}
 	if historyFile, err := os.Create(c.historyFilePath); err != nil {
 		fmt.Printf("There was an error writing history file: %s\n", err)
 	} else {
@@ -987,12 +1132,10 @@ func (c *CommandLine) gopher() {
                                          o:   -h///++////-.
                                         /:   .o/
                                        //+  'y
-                                       ./sooy.
-
-`)
+                                       ./sooy.`)
 }
 
-// Version prints CLI version
+// Version prints the CLI version.
 func (c *CommandLine) Version() {
 	fmt.Println("InfluxDB shell version:", c.ClientVersion)
 }

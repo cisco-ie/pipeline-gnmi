@@ -43,11 +43,11 @@ func TestOCSPDecode(t *testing.T) {
 	}
 
 	if !reflect.DeepEqual(resp.ThisUpdate, expected.ThisUpdate) {
-		t.Errorf("resp.ThisUpdate: got %d, want %d", resp.ThisUpdate, expected.ThisUpdate)
+		t.Errorf("resp.ThisUpdate: got %v, want %v", resp.ThisUpdate, expected.ThisUpdate)
 	}
 
 	if !reflect.DeepEqual(resp.NextUpdate, expected.NextUpdate) {
-		t.Errorf("resp.NextUpdate: got %d, want %d", resp.NextUpdate, expected.NextUpdate)
+		t.Errorf("resp.NextUpdate: got %v, want %v", resp.NextUpdate, expected.NextUpdate)
 	}
 
 	if resp.Status != expected.Status {
@@ -218,14 +218,13 @@ func TestOCSPResponse(t *testing.T) {
 
 	extensionBytes, _ := hex.DecodeString(ocspExtensionValueHex)
 	extensions := []pkix.Extension{
-		pkix.Extension{
+		{
 			Id:       ocspExtensionOID,
 			Critical: false,
 			Value:    extensionBytes,
 		},
 	}
 
-	producedAt := time.Now().Truncate(time.Minute)
 	thisUpdate := time.Date(2010, 7, 7, 15, 1, 5, 0, time.UTC)
 	nextUpdate := time.Date(2010, 7, 7, 18, 35, 17, 0, time.UTC)
 	template := Response{
@@ -269,23 +268,24 @@ func TestOCSPResponse(t *testing.T) {
 			}
 
 			if !reflect.DeepEqual(resp.ThisUpdate, template.ThisUpdate) {
-				t.Errorf("resp.ThisUpdate: got %d, want %d", resp.ThisUpdate, template.ThisUpdate)
+				t.Errorf("resp.ThisUpdate: got %v, want %v", resp.ThisUpdate, template.ThisUpdate)
 			}
 
 			if !reflect.DeepEqual(resp.NextUpdate, template.NextUpdate) {
-				t.Errorf("resp.NextUpdate: got %d, want %d", resp.NextUpdate, template.NextUpdate)
+				t.Errorf("resp.NextUpdate: got %v, want %v", resp.NextUpdate, template.NextUpdate)
 			}
 
 			if !reflect.DeepEqual(resp.RevokedAt, template.RevokedAt) {
-				t.Errorf("resp.RevokedAt: got %d, want %d", resp.RevokedAt, template.RevokedAt)
+				t.Errorf("resp.RevokedAt: got %v, want %v", resp.RevokedAt, template.RevokedAt)
 			}
 
 			if !reflect.DeepEqual(resp.Extensions, template.ExtraExtensions) {
 				t.Errorf("resp.Extensions: got %v, want %v", resp.Extensions, template.ExtraExtensions)
 			}
 
-			if !resp.ProducedAt.Equal(producedAt) {
-				t.Errorf("resp.ProducedAt: got %d, want %d", resp.ProducedAt, producedAt)
+			delay := time.Since(resp.ProducedAt)
+			if delay < -time.Hour || delay > time.Hour {
+				t.Errorf("resp.ProducedAt: got %s, want close to current time (%s)", resp.ProducedAt, time.Now())
 			}
 
 			if resp.Status != template.Status {
@@ -340,6 +340,21 @@ func TestOCSPDecodeMultiResponse(t *testing.T) {
 
 	if resp.SerialNumber.Cmp(cert.SerialNumber) != 0 {
 		t.Errorf("resp.SerialNumber: got %x, want %x", resp.SerialNumber, cert.SerialNumber)
+	}
+}
+
+func TestOCSPDecodeMultiResponseWithoutMatchingCert(t *testing.T) {
+	wrongCert, _ := hex.DecodeString(startComHex)
+	cert, err := x509.ParseCertificate(wrongCert)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	responseBytes, _ := hex.DecodeString(ocspMultiResponseHex)
+	_, err = ParseResponseForCert(responseBytes, cert, nil)
+	want := ParseError("no response matching the supplied certificate")
+	if err != want {
+		t.Errorf("err: got %q, want %q", err, want)
 	}
 }
 

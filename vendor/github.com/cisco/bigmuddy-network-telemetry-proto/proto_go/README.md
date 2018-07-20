@@ -1,3 +1,5 @@
+[![GoDoc](https://godoc.org/github.com/cisco/bigmuddy-network-telemetry-proto/proto_go?status.svg)](https://godoc.org/github.com/cisco/bigmuddy-network-telemetry-proto/proto_go)
+
 ## Streaming Telemetry
 
  Go Proto Library for Cisco IOS-XR Model Driven Telemetry
@@ -7,6 +9,9 @@ ________________________________________________________________________________
 
 The content in `proto_go` directory is automatically generated and
 only committed to the repo for convenience.
+
+Note: Model driven telemetry project is work in progress, and both the
+on and off box components are likely to evolve.
 
 Should it be necessary to regenerate a golang binding, simply run
 `prep_golang.py` from the telemetry_proto root. This script will build
@@ -18,13 +23,14 @@ In some more detail, `prep_golang.py` takes care of setting up
 `docs.go` with `go generate` directives to generate golang bindings
 from `.proto` files, running `go generate` to generate the golang
 bindings for the .proto files, as well as generating the wrapper code
-to serve objects to unmarshal into against the encoding path. Once the
-wrapper code is generated, it is built, and auto generated tests are
-run.
+to serve objects to unmarshal into using the encoding path in the
+telemetry message header as key. Once the wrapper code is generated,
+it is built, and auto generated tests are run.
 
 Package documentation for golang can be browsed by firing up "godoc
 -http=:6060 &" picking which every port is covenient, and then point
-browser to "http://<host>:6060/pkg/telemetry_proto/proto_go/".
+browser to "http://<host>:6060/pkg/telemetry_proto/proto_go/" or
+clicking on the godoc link above.
 
 A sample run looks like this:
 
