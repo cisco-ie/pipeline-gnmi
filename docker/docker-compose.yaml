@@ -1,0 +1,33 @@
+version: '3'
+services:
+  pipeline:
+    build: .
+    environment:
+      - PIPELINE_gnmi_stage=xport_input
+      - PIPELINE_gnmi_type=gnmi
+      - PIPELINE_gnmi_server=192.168.0.1:57777
+      - PIPELINE_gnmi_path1=Cisco-IOS-XR-infra-statsd-oper:infra-statistics/interfaces/interface/latest/generic-counters@10
+      - PIPELINE_gnmi_tls=false
+      - PIPELINE_gnmi_username=cisco
+      - PIPELINE_gnmi__password=cisco
+      - PIPELINE_metrics_stage=xport_output
+      - PIPELINE_metrics_type=metrics
+      - PIPELINE_metrics_file=/etc/pipeline/metrics.json
+      - PIPELINE_metrics_output=influx
+      - PIPELINE_metrics_influx=http://influxdb:8086
+      - PIPELINE_metrics_database=telemetry
+      - PIPELINE_metrics_username=admin
+      - PIPELINE_metrics__password=admin
+
+  influxdb:
+    image: influxdb:alpine
+    environment:
+      - INFLUXDB_DB=telemetry
+      - INFLUXDB_ADMIN_PASSWORD=admin
+
+  chronograf:
+    image: chronograf:alpine
+    command: --influxdb-url=http://influxdb:8086
+    ports: [ "8888:8888" ]
+
+  
