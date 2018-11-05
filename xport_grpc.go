@@ -464,13 +464,14 @@ func (s *grpcLocalServer) MdtDialout(
 		reply, err := stream.Recv()
 		if err != nil {
 			if err == io.EOF {
-				logctx.WithError(err).Error(GRPCLOGPRE +
-					"session closed")
+				//logctx.WithError(err).Error(GRPCLOGPRE +
+				//	"session closed")
+				return nil
 			} else {
 				logctx.WithError(err).Error(GRPCLOGPRE +
 					"session error")
+				return err
 			}
-			return err
 		}
 
 		if len(reply.Data) == 0 {
