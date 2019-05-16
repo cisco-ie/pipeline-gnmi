@@ -18,7 +18,7 @@ PKG = $(shell go list)
 # source.
 VENDOR = $(PKG)/vendor/
 
-LDFLAGS=-ldflags "-X  main.appVersion=v${VERSION}(bigmuddy)"
+LDFLAGS=--ldflags '-X main.appVersion=v${VERSION}(cisco-ie/pipeline-gnmi)'
 
 SOURCEDIR=.
 SOURCES := $(shell find $(SOURCEDIR) -name '*.go' -o -name "*.proto" )
