@@ -7,4 +7,4 @@ include skeleton/pipeline.mk
 test: pretest
 pretest:
 	@echo Setting up zookeeper, kafka. Docker required.
-	tools/test/run.sh
+	cd tools/test && ./run.sh
