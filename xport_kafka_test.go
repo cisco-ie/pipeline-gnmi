@@ -11,10 +11,11 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/dlintw/goconf"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dlintw/goconf"
 )
 
 var kmod kafkaOutputModule
@@ -257,8 +258,11 @@ func TestKafkaConsumer(t *testing.T) {
 		"kafkaconsumerbadkey",
 		"kafkaconsumerbadencoding",
 		"kafkaconsumernobroker",
+		"kafkaconsumernokafkaversion",
+		"kafkaconsumerbadkafkaversion",
 		"kafkaBADrequiredAcks",
 		"kafkaBADTopicTemplace",
+		"kafkaBADkafkaversion",
 	}
 	for _, section := range badsections {
 		err, ctrl = kConsumer.configure(section, nc, dataChans)
