@@ -43,6 +43,9 @@ username = cisco
 password = ...
 ```
 
+## Kafka 2.x Support
+
+This version of Pipeline supports Kafka 2.x by requiring the Kafka version to be specified in the config file. This is a requirement of the underlying Kafka library and ensures that the library is communicating with the Kafka brokers effectively.
 
 ## Improved Docker support
 
