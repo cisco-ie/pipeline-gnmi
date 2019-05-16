@@ -11,14 +11,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	samples "github.com/cisco/bigmuddy-network-telemetry-pipeline/mdt_msg_samples"
-	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
-	"github.com/dlintw/goconf"
-	"github.com/golang/protobuf/jsonpb"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+
+	samples "github.com/cisco-ie/pipeline-gnmi/mdt_msg_samples"
+	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
+	"github.com/dlintw/goconf"
+	"github.com/golang/protobuf/jsonpb"
 )
 
 func TestCodecGPB2JSON(t *testing.T) {

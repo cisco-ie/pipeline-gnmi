@@ -234,8 +234,9 @@ func (client *gnmiClient) loop(ctx context.Context) {
 
 	marshaler := jsonpb.Marshaler{Indent: "  "}
 	logctx.Info("gnmi: SubscribeClient running")
+	cancelled := false
 
-	for {
+	for !cancelled {
 		reply, err := subscribeClient.Recv()
 		select {
 		case <-ctx.Done():
@@ -247,6 +248,7 @@ func (client *gnmiClient) loop(ctx context.Context) {
 				}
 				count++
 			}
+			cancelled = true
 			return
 		default:
 			if err != nil {
@@ -277,7 +279,7 @@ func (client *gnmiClient) loop(ctx context.Context) {
 
 				k := 0
 				for _, update := range notification.Update {
-					_, present := client.selectors[prefix + decodeGNMIPath(update.Path)]
+					_, present := client.selectors[prefix+decodeGNMIPath(update.Path)]
 					if present {
 						notification.Update[k] = update
 						k++
@@ -311,7 +313,6 @@ func (client *gnmiClient) loop(ctx context.Context) {
 			}
 		}
 	}
-
 	logctx.Info("gnmi: all subscriptions closed")
 	return
 }
