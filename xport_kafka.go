@@ -480,6 +480,7 @@ func (k *kafkaOutputModule) configure(name string, nc nodeConfig) (
 			"brokers":      brokerList,
 			"streamSpec":   streamSpec,
 			"requiredAcks": requiredAcks,
+			"kafkaVersion": kafkaVersion,
 		})
 	//
 	// track config in struct
@@ -617,11 +618,12 @@ func (k *kafkaInputModule) maintainKafkaConsumerConnection(
 	// Setup logging context once
 	logCtx := logger.WithFields(
 		log.Fields{
-			"name":     k.name,
-			"topic":    cfg.topic,
-			"group":    cfg.consumerGroup,
-			"brokers":  cfg.brokerList,
-			"encoding": encodingToName(cfg.msgEncoding),
+			"name":         k.name,
+			"topic":        cfg.topic,
+			"group":        cfg.consumerGroup,
+			"brokers":      cfg.brokerList,
+			"encoding":     encodingToName(cfg.msgEncoding),
+			"kafkaVersion": cfg.kafkaVersion,
 		})
 
 	//
