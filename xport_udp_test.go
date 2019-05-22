@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	log "github.com/sirupsen/logrus"
-	samples "github.com/cisco/bigmuddy-network-telemetry-pipeline/mdt_msg_samples"
+	samples "github.com/cisco-ie/pipeline-gnmi/mdt_msg_samples"
 	"github.com/dlintw/goconf"
 	"net"
 	"sync"
