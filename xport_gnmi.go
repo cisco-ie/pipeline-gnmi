@@ -235,7 +235,7 @@ func (client *gnmiClient) loop(ctx context.Context) {
 	marshaler := jsonpb.Marshaler{Indent: "  "}
 	logctx.Info("gnmi: SubscribeClient running")
 
-	for {
+	for ctx.Err() == nil {
 		reply, err := subscribeClient.Recv()
 		select {
 		case <-ctx.Done():
@@ -277,7 +277,7 @@ func (client *gnmiClient) loop(ctx context.Context) {
 
 				k := 0
 				for _, update := range notification.Update {
-					_, present := client.selectors[prefix + decodeGNMIPath(update.Path)]
+					_, present := client.selectors[prefix+decodeGNMIPath(update.Path)]
 					if present {
 						notification.Update[k] = update
 						k++
