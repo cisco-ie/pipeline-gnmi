@@ -13,15 +13,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"github.com/Shopify/sarama"
-	"github.com/prometheus/client_golang/prometheus"
-	log "github.com/sirupsen/logrus"
-	cluster "gopkg.in/bsm/sarama-cluster.v2"
 	"io/ioutil"
 	"regexp"
 	"strings"
 	"text/template"
 	"time"
+
+	"github.com/Shopify/sarama"
+	"github.com/prometheus/client_golang/prometheus"
+	log "github.com/sirupsen/logrus"
+	cluster "gopkg.in/bsm/sarama-cluster.v2"
 )
 
 const (
@@ -66,6 +67,7 @@ type kafkaProducerConfig struct {
 	logData      bool
 	logCtx       *log.Entry
 	stats        msgStats
+	kafkaVersion sarama.KafkaVersion
 }
 
 type kafkaConsumerConfig struct {
@@ -76,6 +78,7 @@ type kafkaConsumerConfig struct {
 	keySpec       kafkaKeySpec
 	msgEncoding   encoding
 	logData       bool
+	kafkaVersion  sarama.KafkaVersion
 }
 
 //
@@ -316,6 +319,7 @@ func (cfg *kafkaProducerConfig) kafkaFeederLoopSticky(
 		config := sarama.NewConfig()
 		config.Producer.RequiredAcks = cfg.requiredAcks
 		config.Producer.Return.Successes = true
+		config.Version = cfg.kafkaVersion
 		msgproducer, err = sarama.NewSyncProducer(cfg.brokerList, config)
 		if err != nil {
 			cfg.logCtx.WithError(err).Error(
@@ -453,6 +457,22 @@ func (k *kafkaOutputModule) configure(name string, nc nodeConfig) (
 		}
 	}
 
+	rawKafkaVersion, err := nc.config.GetString(name, "kafkaversion")
+	if err != nil {
+		logger.WithError(err).WithFields(
+			log.Fields{"name": name}).Error(
+			"kafka producer requires 'kafkaversion' identifying version of Kafka cluster e.g. '2.1.1'")
+		return err, nil, nil
+	}
+	kafkaVersion, err := sarama.ParseKafkaVersion(rawKafkaVersion)
+	if err != nil {
+		logger.WithError(err).WithFields(
+			log.Fields{"name": name,
+				"suppliedVersion": rawKafkaVersion,
+			}).Error("Supplied kafkaversion is invalid!")
+		return err, nil, nil
+	}
+
 	logctx = logctx.WithFields(
 		log.Fields{
 			"name":         name,
@@ -460,6 +480,7 @@ func (k *kafkaOutputModule) configure(name string, nc nodeConfig) (
 			"brokers":      brokerList,
 			"streamSpec":   streamSpec,
 			"requiredAcks": requiredAcks,
+			"kafkaVersion": kafkaVersion,
 		})
 	//
 	// track config in struct
@@ -472,6 +493,7 @@ func (k *kafkaOutputModule) configure(name string, nc nodeConfig) (
 		requiredAcks: requiredAcks,
 		logData:      logData,
 		logCtx:       logctx,
+		kafkaVersion: kafkaVersion,
 	}
 
 	// Create the required channels; a sync ctrl channel and a data channel.
@@ -596,11 +618,12 @@ func (k *kafkaInputModule) maintainKafkaConsumerConnection(
 	// Setup logging context once
 	logCtx := logger.WithFields(
 		log.Fields{
-			"name":     k.name,
-			"topic":    cfg.topic,
-			"group":    cfg.consumerGroup,
-			"brokers":  cfg.brokerList,
-			"encoding": encodingToName(cfg.msgEncoding),
+			"name":         k.name,
+			"topic":        cfg.topic,
+			"group":        cfg.consumerGroup,
+			"brokers":      cfg.brokerList,
+			"encoding":     encodingToName(cfg.msgEncoding),
+			"kafkaVersion": cfg.kafkaVersion,
 		})
 
 	//
@@ -618,6 +641,8 @@ func (k *kafkaInputModule) maintainKafkaConsumerConnection(
 		//
 		// Get a default configuration
 		clusterConfig := cluster.NewConfig()
+		// Explicitly set the Kafka cluster version
+		clusterConfig.Config.Version = cfg.kafkaVersion
 
 		//
 		// Register to receive notifications on rebalancing of
@@ -862,6 +887,22 @@ func (k *kafkaInputModule) configure(
 		logData = false
 	}
 
+	rawKafkaVersion, err := nc.config.GetString(name, "kafkaversion")
+	if err != nil {
+		logger.WithError(err).WithFields(
+			log.Fields{"name": name}).Error(
+			"kafka consumer requires 'kafkaversion' identifying version of Kafka cluster e.g. '2.1.1'")
+		return err, nil
+	}
+	kafkaVersion, err := sarama.ParseKafkaVersion(rawKafkaVersion)
+	if err != nil {
+		logger.WithError(err).WithFields(
+			log.Fields{"name": name,
+				"suppliedVersion": rawKafkaVersion,
+			}).Error("Supplied kafkaversion is invalid!")
+		return err, nil
+	}
+
 	keyopt, err := nc.config.GetString(name, "key")
 	if err != nil {
 		keyopt = ""
@@ -888,6 +929,7 @@ func (k *kafkaInputModule) configure(
 		keySpec:       keySpec,
 		msgEncoding:   enc,
 		logData:       logData,
+		kafkaVersion:  kafkaVersion,
 	}
 
 	//
