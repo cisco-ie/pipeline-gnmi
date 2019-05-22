@@ -2,9 +2,9 @@ package main
 
 import (
 	_ "fmt"
-	log "github.com/sirupsen/logrus"
 	samples "github.com/cisco-ie/pipeline-gnmi/mdt_msg_samples"
 	"github.com/dlintw/goconf"
+	log "github.com/sirupsen/logrus"
 	"golang.org/x/net/context"
 	"google.golang.org/grpc"
 	"io"
