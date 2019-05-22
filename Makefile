@@ -4,7 +4,7 @@ BINARY=pipeline
 include skeleton/pipeline.mk
 
 # Setup pretest as a prerequisite of tests.
-test: pretest
-pretest:
-	@echo Setting up zookeeper, kafka. Docker required.
+testall: pretestinfra
+pretestinfra:
+	@echo Setting up Zookeeper and Kafka. Docker required.
 	tools/test/run.sh
