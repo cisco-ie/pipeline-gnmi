@@ -10,9 +10,9 @@ package main
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
 	"github.com/dlintw/goconf"
+	log "github.com/sirupsen/logrus"
 	"testing"
 	"time"
 )

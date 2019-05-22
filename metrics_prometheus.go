@@ -13,13 +13,14 @@ import (
 	"bufio"
 	"bytes"
 	"fmt"
-	log "github.com/sirupsen/logrus"
 	"hash/fnv"
 	"net/http"
 	"net/url"
 	"os"
 	"regexp"
 	"strings"
+
+	log "github.com/sirupsen/logrus"
 )
 
 //
@@ -75,7 +76,7 @@ func (p *metricsPrometheusOutputHandler) flushMetric(
 	})
 
 	if buf.Len() == 0 {
-		logCtx.Debug("metrics export (no metrics in msg): keys [%v]", tags)
+		logCtx.Debug("metrics export (no metrics in msg): keys ", tags)
 		return
 	}
 
