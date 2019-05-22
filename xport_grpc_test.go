@@ -113,7 +113,7 @@ func TestGRPCRun(t *testing.T) {
 	}
 	log.Debug("       END       ==============================================")
 
-	log.Debug("GRPCTEST: exited datachannel after %d events\n", i)
+	log.Debug("GRPCTEST: exited datachannel after events\n", i)
 	respChan := make(chan *ctrlMsg)
 	request := &ctrlMsg{
 		id:       SHUTDOWN,
