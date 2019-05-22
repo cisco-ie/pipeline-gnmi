@@ -7,4 +7,4 @@ include skeleton/pipeline.mk
 testall: pretestinfra
 pretestinfra:
 	@echo Setting up Zookeeper and Kafka. Docker required.
-	tools/test/run.sh
+	cd tools/test && ./run.sh

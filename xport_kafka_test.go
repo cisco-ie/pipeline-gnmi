@@ -5,7 +5,6 @@
 // All rights reserved.
 //
 //
-// +build integration
 
 package main
 
@@ -259,8 +258,11 @@ func TestKafkaConsumer(t *testing.T) {
 		"kafkaconsumerbadkey",
 		"kafkaconsumerbadencoding",
 		"kafkaconsumernobroker",
+		"kafkaconsumernokafkaversion",
+		"kafkaconsumerbadkafkaversion",
 		"kafkaBADrequiredAcks",
 		"kafkaBADTopicTemplace",
+		"kafkaBADkafkaversion",
 	}
 	for _, section := range badsections {
 		err, ctrl = kConsumer.configure(section, nc, dataChans)
