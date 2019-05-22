@@ -10,17 +10,18 @@ package main
 
 import (
 	"fmt"
-	log "github.com/sirupsen/logrus"
-	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
-	dialin "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go/mdt_grpc_dialin"
-	"github.com/golang/protobuf/proto"
-	"golang.org/x/net/context"
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/metadata"
 	"math/rand"
 	"net"
 	"testing"
 	"time"
+
+	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
+	dialin "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go/mdt_grpc_dialin"
+	"github.com/golang/protobuf/proto"
+	log "github.com/sirupsen/logrus"
+	"golang.org/x/net/context"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
 )
 
 type grpcTestUserPasswordCollector struct {
@@ -222,7 +223,7 @@ func (s *gRPCConfigOperServer) CreateSubs(
 	stream dialin.GRPCConfigOper_CreateSubsServer) error {
 
 	ctx := stream.Context()
-	md, _ := metadata.FromContext(ctx)
+	md, _ := metadata.FromIncomingContext(ctx)
 
 	if md["username"][0] != dummyUsername {
 		return fmt.Errorf("Bad username")
