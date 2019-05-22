@@ -38,6 +38,10 @@ bin/$(BINARY): $(SOURCES)
 generated_source:
 	go generate -x
 
+.PHONY: testall
+testall:
+	go test -v -tags=integration -run=. -bench=. $(PROFILE)
+
 .PHONY: test
 test:
 	go test -v -run=. -bench=. $(PROFILE)

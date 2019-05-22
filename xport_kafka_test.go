@@ -5,16 +5,18 @@
 // All rights reserved.
 //
 //
+// +build integration
 
 package main
 
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/dlintw/goconf"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/dlintw/goconf"
 )
 
 var kmod kafkaOutputModule
