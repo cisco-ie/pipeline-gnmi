@@ -18,9 +18,9 @@ PKG = $(shell go list)
 # source.
 VENDOR = $(PKG)/vendor/
 
-LDFLAGS=-ldflags "-X  main.appVersion=v${VERSION}(bigmuddy)"
+LDFLAGS = -ldflags "-X  main.appVersion=v${VERSION}(bigmuddy)"
 
-SOURCEDIR=.
+SOURCEDIR = .
 SOURCES := $(shell find $(SOURCEDIR) -name '*.go' -o -name "*.proto" )
 # Cumbersome way of excluding vendor directory
 GO_BAR_VENDOR := $(shell go list ./... | egrep -v vendor/)
@@ -34,20 +34,29 @@ bin/$(BINARY): $(SOURCES)
 	go fmt $(GO_BAR_VENDOR)
 	go build $(LDFLAGS) -o bin/$(BINARY)
 
-.PHONY: generated_source
-generated_source:
+.PHONY: generated-source
+generated-source:
 	go generate -x
 
-.PHONY: testall
-testall:
-	go test -v -tags=integration -run=. -bench=. $(PROFILE)
+.PHONY: integration-test
+integration-test:
+	@echo Starting Integration tests
+	go test -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
 
 .PHONY: test
 test:
-	go test -v -run=. -bench=. $(PROFILE)
+	go test -v $(COVER_PROFILE) ./...
 
 .PHONY: coverage
-coverage: PROFILE=-coverprofile=test
+COVER_PROFILE = -coverprofile=coverage.out
 coverage: test
-	go tool cover -html=test
+	go tool cover -html=coverage.out
+
+.PHONY: integration-coverage
+integration-coverage: integration-test
+	go tool cover -html=coverage.out
+
+
+
+
 

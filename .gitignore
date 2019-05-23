@@ -29,3 +29,7 @@ pipeline.log
 
 # JetBrains IDE
 .idea/
+
+# Tests
+
+coverage.out
