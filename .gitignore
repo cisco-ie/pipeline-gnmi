@@ -26,3 +26,6 @@ dumpfiltererd.txt
 mdt_msg_samples/hexdump.bin
 models.txt
 pipeline.log
+
+# JetBrains IDE
+.idea/
