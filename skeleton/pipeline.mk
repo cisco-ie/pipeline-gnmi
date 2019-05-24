@@ -1,4 +1,4 @@
-################################################################################
+#
 #
 # March 2017
 # Copyright (c) 2017 by cisco Systems, Inc.
@@ -6,9 +6,10 @@
 #
 # Rudimentary build and test support
 #
-################################################################################
+#
 
 VERSION = $(shell git describe --always --long --dirty)
+COVER_PROFILE = -coverprofile=coverage.out
 
 PKG = $(shell go list)
 
@@ -43,15 +44,17 @@ integration-test:
 	@echo Starting Integration tests
 	$(GOTEST) -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
 
+## Unit tests
 .PHONY: test
 test:
 	$(GOTEST) -v $(COVER_PROFILE) ./...
 
+## Displays unit test coverage
 .PHONY: coverage
-COVER_PROFILE = -coverprofile=coverage.out
 coverage: test
 	$(GOTOOL) cover -html=coverage.out
 
+## Displays integration test coverage
 .PHONY: integration-coverage
 integration-coverage: integration-test
 	$(GOTOOL) cover -html=coverage.out
