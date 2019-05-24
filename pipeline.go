@@ -15,7 +15,6 @@
 //    back ported.
 //
 //go:generate protoc --go_out=plugins=grpc:. xport_grpc_out.proto
-//go:generate git apply --verbose ./vendor.patch
 //
 package main
 

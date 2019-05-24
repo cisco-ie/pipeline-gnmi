@@ -1,9 +1,11 @@
-FROM alpine:3.8
-ARG REV=master 
+FROM alpine
+ARG GITHUBORG=cisco-ie
+ARG REV=master
+ENV GOPATH=/go
+ENV GO111MODULE=off
 RUN apk add --no-cache openssl && apk add --no-cache --virtual build-deps build-base go git openssh && \
-	git clone -b "$REV" --single-branch --depth 1 https://github.com/cisco-ie/pipeline-gnmi /pipeline && \
-	cd /pipeline && export GOPATH=/pipeline && ln -s vendor src && \
-	go build --ldflags '-extldflags "-static"' -o /bin/pipeline && strip /bin/pipeline && \
+	mkdir -p /go/src/github.com/cisco-ie && cd /go/src/github.com/cisco-ie && git clone -b "$REV" --single-branch --depth 1 https://github.com/${GITHUBORG}/pipeline-gnmi && \
+	cd pipeline-gnmi && go build --ldflags '-extldflags "-static"' -o /bin/pipeline && strip /bin/pipeline && \
 	cd / && rm -rf /pipeline && apk del build-deps
 VOLUME /etc/pipeline
 CMD ["/etc/pipeline/entrypoint.sh"]

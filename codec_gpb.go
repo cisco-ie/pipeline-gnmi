@@ -15,17 +15,17 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
-	pdt "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go/old/telemetry"
-	"github.com/golang/protobuf/jsonpb"
-	"github.com/golang/protobuf/proto"
-	log "github.com/sirupsen/logrus"
 	"reflect"
 	"regexp"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"text/template"
+
+	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
+	pdt "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go/old/telemetry"
+	"github.com/golang/protobuf/proto"
+	log "github.com/sirupsen/logrus"
 )
 
 const (
@@ -364,37 +364,36 @@ func codecGPBJSONifyDataGPB(
 	skipKeys := 0
 	skipContent := 0
 
-	marshaller := &jsonpb.Marshaler{
-		//
-		// EmitUInt64Unquoted ensures that gpb int64/uint64 fields are
-		// marshalled unstringified.
-		//
-		// jsonpb marshals int64,uint64 to string by default.
-		// https://github.com/golang/protobuf/issues/211
-		// https://tools.ietf.org/html/rfc7159#section-6
-		// http://stackoverflow.com/questions/16946306/preserve-int64-values-when-parsing-json-in-go
-		//
-		// Paraphrased: while controversial, it is deemed safer to use
-		// string encoding for u/int64 to make sure that
-		// implementations using IEEE574 for numbers do not go wrong
-		// on numbers outside the 53 bits of integer precision they
-		// support. Hence their choice for 64 bit being a string in
-		// the mapping.
-		//
-		// While we control consumers (e.g. no js consumers), we will
-		// marshal to numbers, so unmarshalling on the other side can
-		// be results in a comparable numeric without special case
-		// coercion.
-		//
-		// If compilation fails because EmitUInt64Unquoted is not an
-		// attribute of jsonpb.Marshaller, it probably means that the
-		// vendored protobuf package was updated and 'go generate' was
-		// not rerun to patch in vendor.patch.
-		//
-		EmitUInt64Unquoted: true,
-		EmitDefaults:       true,
-		OrigName:           true,
-	}
+	marshaler := Marshaler{}
+	//
+	// EmitUInt64Unquoted ensures that gpb int64/uint64 fields are
+	// marshalled unstringified.
+	//
+	// jsonpb marshals int64,uint64 to string by default.
+	// https://github.com/golang/protobuf/issues/211
+	// https://tools.ietf.org/html/rfc7159#section-6
+	// http://stackoverflow.com/questions/16946306/preserve-int64-values-when-parsing-json-in-go
+	//
+	// Paraphrased: while controversial, it is deemed safer to use
+	// string encoding for u/int64 to make sure that
+	// implementations using IEEE574 for numbers do not go wrong
+	// on numbers outside the 53 bits of integer precision they
+	// support. Hence their choice for 64 bit being a string in
+	// the mapping.
+	//
+	// While we control consumers (e.g. no js consumers), we will
+	// marshal to numbers, so unmarshalling on the other side can
+	// be results in a comparable numeric without special case
+	// coercion.
+	//
+	// If compilation fails because EmitUInt64Unquoted is not an
+	// attribute of jsonpb.Marshaller, it probably means that the
+	// vendored protobuf package was updated and 'go generate' was
+	// not rerun to patch in vendor.patch.
+	//
+	marshaler.EmitUInt64Unquoted = true
+	marshaler.EmitDefaults = true
+	marshaler.OrigName = true
 
 	//
 	// Fetch of decode and cache deep decode of GPB content.
@@ -451,7 +450,7 @@ func codecGPBJSONifyDataGPB(
 			var rts rowToSerialise
 			rts.Timestamp = row.Timestamp
 
-			decodedContentJSON, err := marshaller.MarshalToString(row.Content)
+			decodedContentJSON, err := marshaler.MarshalToString(row.Content)
 			if err != nil {
 				skipContent++
 			} else {
@@ -459,7 +458,7 @@ func codecGPBJSONifyDataGPB(
 				rts.Content = &content
 			}
 
-			decodedKeysJSON, err := marshaller.MarshalToString(row.Keys)
+			decodedKeysJSON, err := marshaler.MarshalToString(row.Keys)
 			if err != nil {
 				skipKeys++
 			} else {
@@ -507,13 +506,12 @@ func (m *dataMsgGPB) produceByteStream(
 	case dMStreamJSONEvents, dMStreamJSON:
 
 		var copy telem.Telemetry
-
-		marshaller := &jsonpb.Marshaler{
-			// See long comments above EmitUInt64Unquoted, eslewhere
-			// in this file.
-			EmitUInt64Unquoted: true,
-			EmitDefaults:       true,
-			OrigName:           true}
+		marshaler := Marshaler{}
+		// See long comments above EmitUInt64Unquoted, eslewhere
+		// in this file.
+		marshaler.EmitUInt64Unquoted = true
+		marshaler.EmitDefaults = true
+		marshaler.OrigName = true
 
 		var s msgToSerialise
 		copy = *m.cachedDecode
@@ -532,7 +530,7 @@ func (m *dataMsgGPB) produceByteStream(
 			copy.DataGpbkv = nil
 		}
 
-		telemetryJSON, err := marshaller.MarshalToString(&copy)
+		telemetryJSON, err := marshaler.MarshalToString(&copy)
 		if err != nil {
 			return err, nil
 		}

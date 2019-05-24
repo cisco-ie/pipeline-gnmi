@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/golang/protobuf/jsonpb"
 	"github.com/golang/protobuf/proto"
 	"github.com/openconfig/gnmi/proto/gnmi"
 )
@@ -51,10 +50,10 @@ func (msg *dataMsgGNMI) produceByteStream(streamSpec *dataMsgStreamSpec) (error,
 		return nil, msg.original
 
 	case dMStreamJSON:
-		marshaler := jsonpb.Marshaler{
-			EmitUInt64Unquoted: msg.jsonUInt64Compat,
-			OrigName:           true,
-		}
+		marshaler := Marshaler{}
+		marshaler.EmitUInt64Unquoted = msg.jsonUInt64Compat
+		marshaler.OrigName = true
+
 		json, err := marshaler.MarshalToString(msg.notification)
 		return err, []byte(json)
 	}
