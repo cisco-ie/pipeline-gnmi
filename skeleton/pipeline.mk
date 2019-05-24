@@ -32,7 +32,7 @@ bin/$(BINARY): $(SOURCES)
 	@mkdir -p bin
 	go vet $(GO_BAR_VENDOR)
 	go fmt $(GO_BAR_VENDOR)
-	go build $(LDFLAGS) -o bin/$(BINARY)
+	$(GOBUILD) $(LDFLAGS) -o bin/$(BINARY)
 
 .PHONY: generated-source
 generated-source:
@@ -41,20 +41,20 @@ generated-source:
 .PHONY: integration-test
 integration-test:
 	@echo Starting Integration tests
-	go test -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
+	$(GOTEST) -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
 
 .PHONY: test
 test:
-	go test -v $(COVER_PROFILE) ./...
+	$(GOTEST) -v $(COVER_PROFILE) ./...
 
 .PHONY: coverage
 COVER_PROFILE = -coverprofile=coverage.out
 coverage: test
-	go tool cover -html=coverage.out
+	$(GOTOOL) cover -html=coverage.out
 
 .PHONY: integration-coverage
 integration-coverage: integration-test
-	go tool cover -html=coverage.out
+	$(GOTOOL) cover -html=coverage.out
 
 
 
