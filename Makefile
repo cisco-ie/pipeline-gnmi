@@ -20,7 +20,7 @@ clean: clean-containers
 
 clean-containers:
 	@echo "  >  Cleaning containers"
-	@cd $(DOCKER) && docker-compose kill && docker-compose rm -f
+	@cd $(DOCKER) && docker-compose down --rmi all --volumes --remove-orphans 2>/dev/null
 
 start-containers: clean-containers
 	@echo "  >  Starting containers"
