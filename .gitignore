@@ -31,5 +31,7 @@ pipeline.log
 .idea/
 
 # Tests
-
 coverage.out
+
+# Binary
+# ./bin
