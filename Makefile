@@ -7,9 +7,11 @@ GOTOOL  = $(GOCMD) tool
 GOBASE := $(shell pwd)
 GOBIN  := $(GOBASE)/bin
 DOCKER := $(GOBASE)/tools/test
-
 # name of executable.
-BINARY = pipeline
+BINARY  = pipeline
+BINDIR  = bin
+
+.DEFAULT_GOAL := all
 
 include skeleton/pipeline.mk
 
@@ -27,16 +29,19 @@ start-containers: clean-containers
 	@echo "  >  Starting containers"
 	@cd $(DOCKER) && docker-compose up -d
 
-# Alias for integration-test
+## Alias for integration-test
 testall: integration-test
 
-
 ## Integration test with Kafka and Zookeper
-integration-test: pretestinfra
+integration-test: pre-integration
 
-pretestinfra:
+pre-integration:
 	@echo Setting up Zookeeper and Kafka. Docker required.
 	@$(MAKE) start-containers
+
+## Default target. Builds and executes unit tests
+.PHONY: all
+all: build test
 
 .DEFAULT:
 	@$(MAKE) help
@@ -44,7 +49,7 @@ pretestinfra:
 ## This help message
 .PHONY: help
 help:
-	@printf "\nUsage\n";
+	@printf "\nUsage:\n";
 
 	@awk '{ \
 			if ($$0 ~ /^.PHONY: [a-zA-Z\-\_0-9]+$$/) { \

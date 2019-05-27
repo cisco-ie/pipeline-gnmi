@@ -1,7 +1,7 @@
 #
 #
 # March 2017
-# Copyright (c) 2017 by cisco Systems, Inc.
+# Copyright (c) 2017-2019 by cisco Systems, Inc.
 # All rights reserved.
 #
 # Rudimentary build and test support
@@ -23,17 +23,15 @@ LDFLAGS = -ldflags "-X  main.appVersion=v${VERSION}(bigmuddy)"
 
 SOURCEDIR = .
 SOURCES := $(shell find $(SOURCEDIR) -name '*.go' -o -name "*.proto" )
-# Cumbersome way of excluding vendor directory
-GO_BAR_VENDOR := $(shell go list ./... | egrep -v vendor/)
 
-.DEFAULT_GOAL: bin/$(BINARY)
-
-# Build binary in bin directory
-bin/$(BINARY): $(SOURCES)
-	@mkdir -p bin
-	go vet $(GO_BAR_VENDOR)
-	go fmt $(GO_BAR_VENDOR)
-	$(GOBUILD) $(LDFLAGS) -o bin/$(BINARY)
+## Build binary
+.PHONY: build
+build:
+	@echo "  >  Building pipeline"
+	@mkdir -p $(BINDIR)
+	go vet ./...
+	go fmt ./...
+	$(GOBUILD) $(LDFLAGS) -o $(BINDIR)/$(BINARY)
 
 .PHONY: generated-source
 generated-source:
@@ -44,7 +42,7 @@ integration-test:
 	@echo Starting Integration tests
 	$(GOTEST) -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
 
-## Unit tests
+## Run unit tests
 .PHONY: test
 test:
 	$(GOTEST) -v $(COVER_PROFILE) ./...
