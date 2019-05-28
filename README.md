@@ -1,3 +1,5 @@
+[![Go Report Card](https://goreportcard.com/badge/cisco-ie/pipeline-gnmi)](https://goreportcard.com/report/cisco-ie/pipeline-gnmi)
+
 # Pipeline with GNMI and improved Docker support
 
 This is an improved version of the open-source tool pipeline for telemetry consumption.
