@@ -222,12 +222,9 @@ func TestUDPServer(tb *testing.T) {
 
 				ticker := time.NewTicker(time.Second * 2)
 				old_handled := 0
-				for _ = range ticker.C {
+				for range ticker.C {
 					subt.lock.Lock()
 					if subt.handled >= subt.max {
-						tb.Logf("Complete: handled %d, sent %d, max %d",
-							subt.handled, subt.send, subt.max)
-
 						ticker.Stop()
 						break
 					}
@@ -238,7 +235,6 @@ func TestUDPServer(tb *testing.T) {
 						ticker.Stop()
 						tb.Fatalf("Progress stalled: handled %d, sent %d, max %d",
 							subt.handled, subt.send, subt.max)
-						break
 					}
 					old_handled = subt.handled
 					subt.lock.Unlock()

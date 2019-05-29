@@ -15,9 +15,9 @@ import (
 	"testing"
 )
 
-func sampleDump(sample *SampleTelemetryTableEntry, context MDTContext) (abort bool) {
+func sampleDump(sample *SampleTelemetryTableEntry, _ MDTContext) (abort bool) {
 	if sample.SampleStreamJSON != nil {
-		fmt.Printf("%+v\n", string(sample.SampleStreamJSON))
+		fmt.Printf("SampleStreamJSON length is %d \n", len(sample.SampleStreamJSON))
 	}
 	return false
 }

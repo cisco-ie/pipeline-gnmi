@@ -45,13 +45,11 @@ func TestCodecGPB2JSON(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to jsonify (uint64 -> number) [%v]", err)
 	}
-	fmt.Println("jsonNumber: ", jsonNumber)
 
 	jsonString, err := marshallerEmitString.MarshalToString(source)
 	if err != nil {
 		t.Fatalf("Failed to jsonify (uint64 -> string) [%v]", err)
 	}
-	fmt.Println("jsonString: ", jsonString)
 
 	Unmarshaler := &jsonpb.Unmarshaler{AllowUnknownFields: true}
 	err = Unmarshaler.Unmarshal(bytes.NewBuffer([]byte(jsonString)),
@@ -129,11 +127,10 @@ func codecGPBProcessSampleTemplate(
 	}
 
 	for _, msg := range msgs {
-		err, b := msg.produceByteStream(control.streamSpec)
+		err, _ := msg.produceByteStream(control.streamSpec)
 		if err != nil {
 			control.t.Fatal(err)
 		}
-		fmt.Printf("%s", string(b))
 	}
 
 	return false
