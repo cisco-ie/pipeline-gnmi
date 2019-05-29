@@ -33,5 +33,3 @@ pipeline.log
 # Tests
 coverage.out
 
-# Binary
-# ./bin
