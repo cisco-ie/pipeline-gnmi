@@ -30,7 +30,7 @@ start-containers: clean-containers
 	@cd $(DOCKER) && docker-compose up -d
 
 ## Alias for integration-test
-testall: integration-test
+testall: build integration-test
 
 ## Integration test with Kafka and Zookeper
 integration-test: pre-integration

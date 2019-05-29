@@ -16,5 +16,5 @@ env:
   - TEST_SUITE=unit_tests
 
 script:
-  - if [ "$TEST_SUITE" = "unit_tests" ]; then make test; fi
-  - if [ "$TEST_SUITE" = "integration_tests" ]; then make integration-test; fi
+  - if [ "$TEST_SUITE" = "unit_tests" ]; then make all; fi
+  - if [ "$TEST_SUITE" = "integration_tests" ]; then make testall; fi
