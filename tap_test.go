@@ -28,6 +28,7 @@ func (t *tapTestCtrl) String() string {
 func TestTAPBinaryWriteRead(t *testing.T) {
 	var nc nodeConfig
 	var tapTestCtrlSrc tapTestCtrl
+	const numDataMsg = 10
 
 	logger.Info("Start TestTAPBinaryWriteRead")
 	sample := samples.MDTSampleTelemetryTableFetchOne(
@@ -63,7 +64,7 @@ func TestTAPBinaryWriteRead(t *testing.T) {
 	}
 
 	logger.Info("Injecting content")
-	for i := 0; i < 10; i++ {
+	for i := 0; i < numDataMsg; i++ {
 		inject <- msgs[0]
 		//
 		// Now that messages are injected, we should be able to pick
@@ -80,9 +81,13 @@ func TestTAPBinaryWriteRead(t *testing.T) {
 	}
 
 	logger.Info("Now let's read it")
-	for i := 0; i < 10; i++ {
-		dM := <-dataChan
-		t.Log(dM.getDataMsgDescription())
+
+	var i int
+	for i = 0; i < numDataMsg; i++ {
+		<-dataChan
+	}
+	if i != numDataMsg {
+		t.Fatalf("Received %d out of 10 messages", i+1)
 	}
 
 	respChan := make(chan *ctrlMsg)
@@ -140,7 +145,6 @@ func TestTAPBinaryReadWrite(t *testing.T) {
 	// 7 message in replay_bin_archive
 	for i := 0; i < 7; i++ {
 		dM := <-dataChan
-		t.Log(dM.getDataMsgDescription())
 		inject <- dM
 	}
 
