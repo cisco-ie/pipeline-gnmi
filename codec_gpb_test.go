@@ -11,14 +11,15 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
-	samples "github.com/cisco-ie/pipeline-gnmi/mdt_msg_samples"
-	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
-	"github.com/dlintw/goconf"
-	"github.com/golang/protobuf/jsonpb"
 	"os"
 	"reflect"
 	"strings"
 	"testing"
+
+	samples "github.com/cisco-ie/pipeline-gnmi/mdt_msg_samples"
+	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
+	"github.com/dlintw/goconf"
+	"github.com/golang/protobuf/jsonpb"
 )
 
 func TestCodecGPB2JSON(t *testing.T) {
@@ -29,16 +30,20 @@ func TestCodecGPB2JSON(t *testing.T) {
 	source := &telem.Telemetry{
 		CollectionId: 1234567890,
 	}
-	marshallerEmitNumber := &jsonpb.Marshaler{
+	marshallerEmitNumber := &Marshaler{
 		EmitUInt64Unquoted: true,
-		EmitDefaults:       true,
-		OrigName:           true,
+		Marshaler: jsonpb.Marshaler{
+			EmitDefaults: true,
+			OrigName:     true,
+		},
 	}
 
-	marshallerEmitString := &jsonpb.Marshaler{
+	marshallerEmitString := &Marshaler{
 		EmitUInt64Unquoted: false,
-		EmitDefaults:       true,
-		OrigName:           true,
+		Marshaler: jsonpb.Marshaler{
+			EmitDefaults: true,
+			OrigName:     true,
+		},
 	}
 
 	jsonNumber, err := marshallerEmitNumber.MarshalToString(source)
@@ -474,8 +479,6 @@ func TestCodecGPBDescribe(t *testing.T) {
 }
 
 func TestCodecGPBBasic(t *testing.T) {
-
-	t.Skip("skipping until fixed.travis.yml.")
 
 	err, codec := getNewCodecGPB("test", ENCODING_GPB)
 
