@@ -9,7 +9,6 @@
 package main
 
 import (
-	"fmt"
 	telem "github.com/cisco/bigmuddy-network-telemetry-proto/proto_go"
 	"github.com/dlintw/goconf"
 	log "github.com/sirupsen/logrus"
@@ -147,9 +146,14 @@ func TestDataMsgRouter(t *testing.T) {
 				w = 0
 			}
 		}
+		totalHandled := 0
 		for w = 0; w < workers; w++ {
-			fmt.Printf("worker %d handled %d\n", w, w_handled[w])
+			totalHandled += w_handled[w]
 		}
+		if count != totalHandled {
+			t.Fatalf("Received %d out of %d messsages", totalHandled, count)
+		}
+
 		close(ready)
 	}()
 
@@ -160,7 +164,7 @@ func TestDataMsgRouter(t *testing.T) {
 	time.Sleep(1 * time.Second)
 	close(shutChan)
 	<-ready
-	fmt.Println("Blocked: ", blocked)
+	// fmt.Println("Blocked: ", blocked)
 	if count != received {
 		t.Fatalf("Expected %d, got %d when testing with send and block",
 			count, received)
