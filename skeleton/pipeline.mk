@@ -39,7 +39,7 @@ generated-source:
 
 .PHONY: integration-test
 integration-test:
-	@echo Starting Integration tests
+	@echo "  >   Starting integration tests"
 	$(GOTEST) -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
 
 ## Run unit tests
