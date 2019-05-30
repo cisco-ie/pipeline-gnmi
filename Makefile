@@ -34,7 +34,7 @@ start-containers: stop-containers
 	@cd $(DOCKER) && docker-compose up -d
 
 ## Alias for integration-test
-testall: build integration-test
+testall: build hygiene integration-test
 
 ## Integration test with Kafka and Zookeper
 .PHONY: integration-test
@@ -47,7 +47,7 @@ integration-test:
 
 ## Default target. Builds and executes unit tests
 .PHONY: all
-all: build test
+all: build hygiene test
 
 .DEFAULT:
 	@$(MAKE) help
