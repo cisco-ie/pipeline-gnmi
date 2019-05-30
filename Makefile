@@ -27,7 +27,7 @@ clean-containers:
 
 stop-containers:
 	@echo "  >  Stopping containers"
-	@cd $(DOCKER) && docker-compose down --volumes
+	@cd $(DOCKER) && docker-compose down --volumes 2>/dev/null
 
 start-containers: stop-containers
 	@echo "  >  Starting containers"
@@ -37,11 +37,13 @@ start-containers: stop-containers
 testall: build integration-test
 
 ## Integration test with Kafka and Zookeper
-integration-test: pre-integration
-
-pre-integration:
+.PHONY: integration-test
+integration-test:
 	@echo "  >  Setting up Zookeeper and Kafka. Docker required."
 	@$(MAKE) start-containers
+	@echo "  >   Starting integration tests"
+	$(GOTEST) -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
+	@$(MAKE) stop-containers
 
 ## Default target. Builds and executes unit tests
 .PHONY: all
