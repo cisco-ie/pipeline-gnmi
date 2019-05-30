@@ -29,9 +29,14 @@ SOURCES := $(shell find $(SOURCEDIR) -name '*.go' -o -name "*.proto" )
 build:
 	@echo "  >  Building pipeline"
 	@mkdir -p $(BINDIR)
+	$(GOBUILD) $(LDFLAGS) -o $(BINDIR)/$(BINARY)
+
+## Run hygiene tools like vet, fmt, ...
+.PHONY: hygiene
+hygiene:
+	@echo "  >  Running hygiene tooling"
 	go vet -composites=false ./...
 	go fmt ./...
-	$(GOBUILD) $(LDFLAGS) -o $(BINDIR)/$(BINARY)
 
 .PHONY: generated-source
 generated-source:
