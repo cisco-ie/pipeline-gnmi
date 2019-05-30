@@ -14,6 +14,7 @@ go:
 env:
   - TEST_SUITE=integration_tests
   - TEST_SUITE=unit_tests
+  - GO111MODULE=on
 
 script:
   - if [ "$TEST_SUITE" = "unit_tests" ]; then make all; fi
