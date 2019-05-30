@@ -41,6 +41,7 @@ generated-source:
 integration-test:
 	@echo "  >   Starting integration tests"
 	$(GOTEST) -v -coverpkg=./... -tags=integration $(COVER_PROFILE) ./...
+	@$(MAKE) stop-containers
 
 ## Run unit tests
 .PHONY: test

@@ -27,7 +27,7 @@ clean-containers:
 
 stop-containers:
 	@echo "  >  Stopping containers"
-	@cd $(DOCKER) && docker-compose down --volumes
+	@cd $(DOCKER) && docker-compose down --volumes 2>/dev/null
 
 start-containers: stop-containers
 	@echo "  >  Starting containers"
