@@ -12,8 +12,11 @@ go:
   - 1.12.x
 
 env:
-  - TEST_SUITE=integration_tests
-  - TEST_SUITE=unit_tests
+  global:
+    - GO111MODULE=on
+  matrix:
+    - TEST_SUITE=integration_tests
+    - TEST_SUITE=unit_tests
 
 script:
   - if [ "$TEST_SUITE" = "unit_tests" ]; then make all; fi
