@@ -25,7 +25,11 @@ clean-containers:
 	@echo "  >  Cleaning containers"
 	@cd $(DOCKER) && docker-compose down --rmi all --volumes --remove-orphans 2>/dev/null
 
-start-containers: clean-containers
+stop-containers:
+	@echo "  >  Stopping containers"
+	@cd $(DOCKER) && docker-compose down --volumes
+
+start-containers: stop-containers
 	@echo "  >  Starting containers"
 	@cd $(DOCKER) && docker-compose up -d
 
@@ -36,7 +40,7 @@ testall: build integration-test
 integration-test: pre-integration
 
 pre-integration:
-	@echo Setting up Zookeeper and Kafka. Docker required.
+	@echo "  >  Setting up Zookeeper and Kafka. Docker required."
 	@$(MAKE) start-containers
 
 ## Default target. Builds and executes unit tests
