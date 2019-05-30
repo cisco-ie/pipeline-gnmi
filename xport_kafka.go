@@ -225,10 +225,9 @@ func (cfg *kafkaProducerConfig) kafkaFeederLoop(
 				kafkaMetaMonitor.CountersErrors.WithLabelValues(
 					cfg.name, *topic, *key, "out").Inc()
 				logMsgCtx := logCtx.WithError(err).WithFields(log.Fields{
-					"msg":     msg.getDataMsgDescription(),
-					"topic":   *topic,
-					"key":     *key,
-					"content": hex.Dump(*rawstream),
+					"msg":   msg.getDataMsgDescription(),
+					"topic": *topic,
+					"key":   *key,
 				})
 				if cfg.logData {
 					logMsgCtx = logMsgCtx.WithFields(log.Fields{
