@@ -7,7 +7,7 @@
 The original pipeline README is included [here](README-PIPELINE.md) for reference.
 
 ## Usage
-pipeline-gnmi is written in Go and targets Go 1.11+.
+pipeline-gnmi is written in Go and targets Go 1.11+. Windows and MacOS/Darwin support is experimental.
 
 1) pipeline-gnmi binaries may be downloaded from [Releases](https://github.com/cisco-ie/pipeline-gnmi/releases)
 2) Built from source:

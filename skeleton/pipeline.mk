@@ -24,14 +24,26 @@ LDFLAGS = -ldflags "-X  main.appVersion=v${VERSION}(bigmuddy)"
 SOURCEDIR = .
 SOURCES := $(shell find $(SOURCEDIR) -name '*.go' -o -name "*.proto" )
 
-## Build binary
+# Derived from https://vic.demuzere.be/articles/golang-makefile-crosscompile/
+PLATFORMS := linux/amd64 windows/amd64 darwin/amd64
+GOPLATFORMTEMP = $(subst /, ,$@)
+GOOS = $(word 1, $(GOPLATFORMTEMP))
+GOARCH = $(word 2, $(GOPLATFORMTEMP))
+
+.PHONY: $(PLATFORMS)
+$(PLATFORMS):
+	@echo "  >  Building for ${GOOS}/${GOARCH}"
+	GOOS=$(GOOS) GOARCH=$(GOARCH) $(GOBUILD) $(LDFLAGS) -o $(BINDIR)/$(BINARY)_$(GOOS)_$(GOARCH)
+
+## Build binaries
 .PHONY: build
-build:
-	@echo "  >  Building pipeline"
-	@mkdir -p $(BINDIR)
+build: hygiene $(PLATFORMS)
+
+## Run Go hygiene tooling like vet and fmt
+hygiene:
+	@echo "  >  Running Go hygiene tooling"
 	go vet -composites=false ./...
 	go fmt ./...
-	$(GOBUILD) $(LDFLAGS) -o $(BINDIR)/$(BINARY)
 
 .PHONY: generated-source
 generated-source:
