@@ -105,5 +105,8 @@ Additionally, existing replays of sensor data can be fed in efficiently using xz
 ## Licensing
 pipeline-gnmi is licensed with [Apache License, Version 2.0](LICENSE), per pipeline.
 
+## Help!
+For support, please open a [GitHub Issue](https://github.com/cisco-ie/pipeline-gnmi/issues) or email [cisco-ie@cisco.com](mailto:cisco-ie@cisco.com).
+
 ## Special Thanks
 Chris Cassar for implementing `pipeline` used by anyone interested in MDT, Steven Barth for gNMI plugin development, and the Cisco teams implementing MDT support in the platforms.
