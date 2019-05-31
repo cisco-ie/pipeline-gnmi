@@ -2,12 +2,14 @@
 
 > A streamlined Model-Driven Telemetry collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) including enhancements and bug fixes. 
 
-`pipeline-gnmi` is a Model-Driven Telemetry (MDT) collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) which has a refreshed codebase improving maintainability, performance, and modern compatibility. It supports MDT from IOS XE, IOS XR, and NX-OS, enabling DIY operators with cross-platform Cisco MDT collection.
+`pipeline-gnmi` is a Model-Driven Telemetry (MDT) collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) which has a refreshed codebase improving maintainability, performance, and modern compatibility. It supports MDT from IOS XE, IOS XR, and NX-OS enabling end-to-end Cisco MDT collection for DIY operators.
 
-The original `pipeline` README is included [here](README-PIPELINE.md) for reference.
+The original pipeline README is included [here](README-PIPELINE.md) for reference.
 
-## Installation
-1) `pipeline-gnmi` can be downloaded from [Releases](https://github.com/cisco-ie/pipeline-gnmi/releases)
+## Usage
+pipeline-gnmi is written in Go and targets Go 1.11+.
+
+1) pipeline-gnmi binaries may be downloaded from [Releases](https://github.com/cisco-ie/pipeline-gnmi/releases)
 2) Built from source:
 ```bash
 git clone https://github.com/cisco-ie/pipeline-gnmi
@@ -17,10 +19,10 @@ make build
 3) Acquired via `go get github.com/cisco-ie/pipeline-gnmi` to be located in `$GOPATH/bin`
 
 ## Configuration
-`pipeline` configuration support is maintained and detailed in the [original README](README-PIPELINE.md). Sample configuration is supplied as [pipeline.conf](pipeline.conf).
+pipeline configuration support is maintained and detailed in the [original README](README-PIPELINE.md). Sample configuration is supplied as [pipeline.conf](pipeline.conf).
 
 ### gNMI Support
-This version of pipeline introduces support for [gNMI](https://github.com/openconfig/reference/tree/master/rpc/gnmi).
+This project introduces support for [gNMI](https://github.com/openconfig/reference/tree/master/rpc/gnmi).
 gNMI is a standardized and cross-platform protocol for network management and telemetry. gNMI does not require prior sensor path configuration on the target device, merely enabling gRPC/gNMI is enough. Sensor paths are requested by the collector (e.g. pipeline). Subscription type (interval, on-change, target-defined) can be specified per path.
 
 Filtering of retrieved sensor values can be done directly at the input stage through selectors in the configuration file,
@@ -58,7 +60,7 @@ password = ...
 ```
 
 ### Kafka 2.x Support
-This version of Pipeline supports Kafka 2.x by requiring the Kafka version to be specified in the config file. This is a requirement of the underlying Kafka library and ensures that the library is communicating with the Kafka brokers effectively.
+This project supports Kafka 2.x by requiring the Kafka version (`kafkaversion`) to be specified in the config file stage. This is a requirement of the underlying Kafka library and ensures that the library is communicating with the Kafka brokers effectively.
 
 ```
 [kafkaconsumer]
@@ -73,8 +75,7 @@ kafkaversion=2.1.0
 ```
 
 ### Docker Environment Variables
-
-This version of `pipeline` has improved Docker support. The Dockerfile uses multi-stage builds and
+This project has improved Docker support. The Dockerfile uses multi-stage builds and
 builds Pipeline from scratch. The configuration file can now be created from environment variables directly,
 e.g.
 
@@ -102,7 +103,7 @@ given or does not exist it is created upon creation of the container.
 Additionally, existing replays of sensor data can be fed in efficiently using xz-compressed files.
 
 ## Licensing
-`pipeline-gnmi` is licensed with [Apache License, Version 2.0](LICENSE), per `pipeline`.
+pipeline-gnmi is licensed with [Apache License, Version 2.0](LICENSE), per pipeline.
 
 ## Special Thanks
-Chris Cassar for implementing `pipeline` used by anyone interested in MDT, and Steven Barth for gNMI plugin development.
+Chris Cassar for implementing `pipeline` used by anyone interested in MDT, Steven Barth for gNMI plugin development, and the Cisco teams implementing MDT support in the platforms.
