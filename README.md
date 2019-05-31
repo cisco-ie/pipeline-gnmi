@@ -1,18 +1,32 @@
-[![Go Report Card](https://goreportcard.com/badge/cisco-ie/pipeline-gnmi)](https://goreportcard.com/report/cisco-ie/pipeline-gnmi)
+# pipeline-gnmi [![Go Report Card](https://goreportcard.com/badge/cisco-ie/pipeline-gnmi)](https://goreportcard.com/report/cisco-ie/pipeline-gnmi) [![Build Status](https://travis-ci.org/cisco-ie/pipeline-gnmi.svg?branch=master)](https://travis-ci.org/cisco-ie/pipeline-gnmi)
 
-# Pipeline with GNMI and improved Docker support
+> A streamlined Model-Driven Telemetry collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) including enhancements and bug fixes. 
 
-This is an improved version of the open-source tool pipeline for telemetry consumption.
-The original README can be found here: [README-PIPELINE.md](README-PIPELINE.md)
+`pipeline-gnmi` is a Model-Driven Telemetry (MDT) collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) which has a refreshed codebase improving maintainability, performance, and modern compatibility. It supports MDT from IOS XE, IOS XR, and NX-OS enabling end-to-end Cisco MDT collection for DIY operators.
 
+The original pipeline README is included [here](README-PIPELINE.md) for reference.
 
-## GNMI support
+## Usage
+pipeline-gnmi is written in Go and targets Go 1.11+.
 
-This version of pipeline introduces support for [GNMI](https://github.com/openconfig/reference/tree/master/rpc/gnmi).
-GNMI is a standardized and cross-platform protocol for network management and telemetry. GNMI does not require prior sensor path configuration on the target device, merely enabling gRPC/gNMI is enough. Sensor paths are requested by the collector (e.g. pipeline). Subscription type (interval, on-change, target-defined) can be specified per path.
+1) pipeline-gnmi binaries may be downloaded from [Releases](https://github.com/cisco-ie/pipeline-gnmi/releases)
+2) Built from source:
+```bash
+git clone https://github.com/cisco-ie/pipeline-gnmi
+cd pipeline-gnmi
+make build
+```
+3) Acquired via `go get github.com/cisco-ie/pipeline-gnmi` to be located in `$GOPATH/bin`
+
+## Configuration
+pipeline configuration support is maintained and detailed in the [original README](README-PIPELINE.md). Sample configuration is supplied as [pipeline.conf](pipeline.conf).
+
+### gNMI Support
+This project introduces support for [gNMI](https://github.com/openconfig/reference/tree/master/rpc/gnmi).
+gNMI is a standardized and cross-platform protocol for network management and telemetry. gNMI does not require prior sensor path configuration on the target device, merely enabling gRPC/gNMI is enough. Sensor paths are requested by the collector (e.g. pipeline). Subscription type (interval, on-change, target-defined) can be specified per path.
 
 Filtering of retrieved sensor values can be done directly at the input stage through selectors in the configuration file,
-by defining all the sensor paths that should be stored in a TSDB or forwarded via Kafka. Regular metrics filtering through metrics.json files is ignored and not implemented, due to the lack of user-friendliness of the configuration.
+by defining all the sensor paths that should be stored in a TSDB or forwarded via Kafka. **Regular metrics filtering through metrics.json files is ignored and not implemented**, due to the lack of user-friendliness of the configuration.
 
 ```
 [mygnmirouter]
@@ -45,14 +59,24 @@ username = cisco
 password = ...
 ```
 
-## Kafka 2.x Support
+### Kafka 2.x Support
+This project supports Kafka 2.x by requiring the Kafka version (`kafkaversion`) to be specified in the config file stage. This is a requirement of the underlying Kafka library and ensures that the library is communicating with the Kafka brokers effectively.
 
-This version of Pipeline supports Kafka 2.x by requiring the Kafka version to be specified in the config file. This is a requirement of the underlying Kafka library and ensures that the library is communicating with the Kafka brokers effectively.
+```
+[kafkaconsumer]
+topic=mdt
+consumergroup=pipeline-gnmi
+type=kafka
+stage=xport_input
+brokers=kafka-host:9092
+encoding=gpb
+datachanneldepth=1000
+kafkaversion=2.1.0
+```
 
-## Improved Docker support
-
-This version of Pipeline has proper Docker support. The Dockerfile is now using Alpine (for decreased overhead) and
-builds Pipeline from scratch. Additionally the configuration file can now be created from environment variables directly,
+### Docker Environment Variables
+This project has improved Docker support. The Dockerfile uses multi-stage builds and
+builds Pipeline from scratch. The configuration file can now be created from environment variables directly,
 e.g.
 
 ```
@@ -76,10 +100,13 @@ the *password* option. Similarly *_secret* can be used, then the value is read f
 value, encrypted using the pipeline RSA key and then written as *password* option. If the Pipeline RSA key is not
 given or does not exist it is created upon creation of the container.
 
-Additionally existing replays of sensor data can be fed in efficiently using xz-compressed files.
+Additionally, existing replays of sensor data can be fed in efficiently using xz-compressed files.
 
+## Licensing
+pipeline-gnmi is licensed with [Apache License, Version 2.0](LICENSE), per pipeline.
 
-## Updated dependencies and improved builds
+## Help!
+For support, please open a [GitHub Issue](https://github.com/cisco-ie/pipeline-gnmi/issues) or email [cisco-ie@cisco.com](mailto:cisco-ie@cisco.com).
 
-Dependencies in the vendor directory have been updated and source-code has been adapted accordingly.
-Additionally builds are now statically linked (independent of build environment or userland) and stripped for size.
+## Special Thanks
+Chris Cassar for implementing `pipeline` used by anyone interested in MDT, Steven Barth for gNMI plugin development, and the Cisco teams implementing MDT support in the platforms.
