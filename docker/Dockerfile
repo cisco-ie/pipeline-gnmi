@@ -1,12 +1,14 @@
-FROM alpine
+FROM golang:1.12-stretch as build
 ARG GITHUBORG=cisco-ie
 ARG REV=master
-ENV GOPATH=/go
-ENV GO111MODULE=on
-RUN apk add --no-cache openssl && apk add --no-cache --virtual build-deps build-base go git openssh && \
-	mkdir -p /data/ && cd /data/ && git clone -b "$REV" --single-branch --depth 1 https://github.com/${GITHUBORG}/pipeline-gnmi && \
-	cd pipeline-gnmi && go build --ldflags '-extldflags "-static"' -o /bin/pipeline && strip /bin/pipeline && \
-	cd / && rm -rf /data && apk del build-deps
+ARG GO111MODULE=on
+RUN mkdir -p /data/ && cd /data/ && git clone -b "$REV" --single-branch --depth 1 https://github.com/${GITHUBORG}/pipeline-gnmi && \
+	cd pipeline-gnmi && env CGO_ENABLED=0 make linux/amd64 && strip bin/pipeline_linux_amd64
+
+FROM alpine
+RUN apk add --no-cache openssl
 VOLUME /etc/pipeline
-CMD ["/etc/pipeline/entrypoint.sh"]
+COPY --from=build /data/pipeline-gnmi/bin/pipeline_linux_amd64 /bin/pipeline
 COPY entrypoint.sh metrics.json /etc/pipeline/
+RUN chmod +x /etc/pipeline/entrypoint.sh
+ENTRYPOINT ["/etc/pipeline/entrypoint.sh"]
