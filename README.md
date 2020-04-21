@@ -2,9 +2,9 @@
 
 **NOTE**: Please evaluate usage of the following [Telegraf](https://github.com/influxdata/telegraf) plugins for your use case: [cisco_telemetry_mdt](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/cisco_telemetry_mdt) and [cisco_telemetry_gnmi](https://github.com/influxdata/telegraf/tree/master/plugins/inputs/cisco_telemetry_gnmi). These are more recently developed and allow all the benefits of the Telegraf ecosystem e.g. more output plugins, etc.
 
-> A streamlined Model-Driven Telemetry collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) including enhancements and bug fixes. 
+> A Model-Driven Telemetry collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) including enhancements and bug fixes. 
 
-`pipeline-gnmi` is a Model-Driven Telemetry (MDT) collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) which has a refreshed codebase improving maintainability, performance, and modern compatibility. It supports MDT from IOS XE, IOS XR, and NX-OS enabling end-to-end Cisco MDT collection for DIY operators.
+`pipeline-gnmi` is a Model-Driven Telemetry (MDT) collector based on the open-source tool [`pipeline`](https://github.com/cisco/bigmuddy-network-telemetry-pipeline) which has improved maintainability and compatibility. It supports MDT from IOS XE, IOS XR, and NX-OS enabling end-to-end Cisco MDT collection for DIY operators.
 
 The original pipeline README is included [here](README-PIPELINE.md) for reference.
 
